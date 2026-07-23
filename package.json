@@ -1,0 +1,14 @@
+{
+  "name": "yamin",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev:infra && npm run dev:apps",
+    "dev:infra": "docker compose up -d --wait postgres redis && npm --prefix backend run migration:run",
+    "dev:apps": "concurrently -n api,worker,web -c blue,magenta,green \"npm --prefix backend run dev\" \"npm --prefix backend run dev:worker\" \"npm --prefix frontend run web\"",
+    "stop": "docker compose down",
+    "doctor": "npx react-doctor@latest"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

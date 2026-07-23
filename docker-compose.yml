@@ -1,0 +1,183 @@
+services:
+  # --- PostgreSQL Database Engine (with pgvector support) ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: yamin_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DATABASE_USERNAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
+    ports:
+      # Loopback-bound: reachable from this host (local `npm run dev`) but not
+      # from the network. A bare '5433:5432' binds 0.0.0.0.
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DATABASE_USERNAME} -d ${DATABASE_NAME}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- Redis Server (BullMQ Queue Hub + socket.io adapter backbone) ---
+  redis:
+    image: redis:7-alpine
+    container_name: yamin_redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      # Loopback-bound. Redis holds queued voice notes and realtime traffic;
+      # the previous '6379:6379' bound 0.0.0.0, exposing it to the whole
+      # network behind one weak password. Keeping it on 127.0.0.1 still lets a
+      # local `npm run dev` connect, which the containers don't need but you do.
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # --- One-shot schema migration ---
+  # Runs to completion before either app instance starts. Previously nothing ran
+  # migrations at all: the app booted with DATABASE_SYNCHRONIZE=true and let
+  # TypeORM guess the schema, which is what put the pgvector column at risk.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: yamin_migrate
+    restart: 'no'
+    command: ['npm', 'run', 'migration:run:prod']
+    env_file:
+      - .env
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Backend HTTP & WebSockets API Instance (producer) ---
+  backend-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: yamin_backend_api
+    restart: always
+    command: ['node', 'dist/main']
+    env_file:
+      - .env
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - REDIS_HOST=redis
+    ports:
+      # Loopback-bound, same reasoning as postgres/redis above: reachable from
+      # this host for debugging, but not from the internet. nginx (below) is
+      # the only service with a publicly published port, and reaches this one
+      # over the internal compose network regardless of this mapping.
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://localhost:3000/api/v1/health/ready'', r => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # --- Backend Background Worker Instance (consumer) ---
+  # Separate entrypoint, not a RUN_MODE env branch. The branch used to load the
+  # same AppModule either way, so the API consumed jobs too and the split was
+  # cosmetic. Scale with: docker compose up --scale backend-worker=3
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # No container_name — Docker refuses to scale a service that pins one.
+    restart: always
+    command: ['node', 'dist/main.worker']
+    env_file:
+      - .env
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - REDIS_HOST=redis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # --- Reverse proxy: HTTPS for backend-api ---
+  # The only service with a port exposed to the internet. Serves whatever
+  # config is in ./nginx/conf.d — see that folder's README for the two-phase
+  # bootstrap (HTTP-only first, to obtain a cert; HTTPS after).
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: yamin_nginx
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+    depends_on:
+      backend-api:
+        condition: service_healthy
+
+  # --- Certbot: obtains and renews the free Let's Encrypt certificate ---
+  # Runs `certbot renew` on a loop every 12h; renew is a no-op until the cert
+  # is within 30 days of expiring, so this is safe to leave running forever.
+  # The FIRST certificate has to be requested manually once — see
+  # nginx/README.md.
+  certbot:
+    image: certbot/certbot
+    container_name: yamin_certbot
+    restart: always
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: >
+      sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done;"
+
+  # --- Frontend React Native (Expo Web) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the bundle at build time (see frontend/Dockerfile). Unset
+        # means the app's own default, http://localhost:3000 — correct for a
+        # browser on this machine, wrong from a phone. To test on a device, set
+        # EXPO_PUBLIC_API_URL to this host's LAN address in .env and rebuild:
+        #   EXPO_PUBLIC_API_URL=http://192.168.10.61:3000
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-}
+    container_name: yamin_frontend
+    restart: always
+    ports:
+      - '8080:8080'
+
+volumes:
+  pgdata:
+  redisdata:
+  certbot_www:
+  certbot_certs:
