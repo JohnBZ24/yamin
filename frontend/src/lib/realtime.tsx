@@ -46,11 +46,27 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     const s = io(API_URL, {
       auth: { token: `Bearer ${token}` },
-      transports: ['websocket'],
+      // Let socket.io negotiate: open on polling, then upgrade to a WebSocket.
+      //
+      // This was pinned to ['websocket'], which skips negotiation and opens the
+      // WebSocket directly. Behind nginx that handshake never completed — no
+      // connect, no connect_error, just silence, so the gateway never saw the
+      // client and `voice-processed` never arrived. A note stayed "pending"
+      // until the user manually refreshed. Polling-then-upgrade is the default
+      // for exactly this reason: it degrades instead of hanging when something
+      // between the app and the server mishandles a bare upgrade.
+      transports: ['polling', 'websocket'],
     });
 
     s.on('connect', () => setOnline(true));
     s.on('disconnect', () => setOnline(false));
+    // A realtime failure is otherwise invisible — the feed simply stops
+    // updating and looks like a slow backend. This is what made the
+    // websocket-only handshake bug take so long to find.
+    s.on('connect_error', (err) => {
+      setOnline(false);
+      console.warn(`[realtime] connection failed: ${err.message}`);
+    });
 
     s.on('reminder-alert', (data: any) => {
       // OS notification first (browser Notification on web, a real local
