@@ -27,7 +27,13 @@ render() {
 reload_nginx() {
     # Reload if nginx is already up; otherwise the next `compose up` reads the
     # fresh config anyway.
-    docker compose -f ../docker-compose.yml exec nginx nginx -s reload 2>/dev/null \
+    #
+    # -T and </dev/null are both load-bearing. This script is normally invoked
+    # from a `ssh host 'bash -s' <<'EOF'` heredoc, where STDIN *is* the rest of
+    # the deploy script. `docker compose exec` claims STDIN by default, so it
+    # swallowed every remaining line — the build and restart steps silently
+    # never ran, and the deploy still exited 0 and reported success.
+    docker compose -f ../docker-compose.yml exec -T nginx nginx -s reload </dev/null 2>/dev/null \
         || echo "nginx not running yet — config will be picked up on next start"
 }
 
@@ -49,11 +55,12 @@ fi
 # request the cert, then switch to HTTPS.
 : "${CERTBOT_EMAIL:?First run for $DOMAIN needs CERTBOT_EMAIL=you@example.com}"
 render http.conf.template "$DOMAIN"
-docker compose -f ../docker-compose.yml up -d nginx
-docker compose -f ../docker-compose.yml run --rm certbot certonly \
+docker compose -f ../docker-compose.yml up -d nginx </dev/null
+# --rm certbot would likewise inherit and consume the caller's STDIN.
+docker compose -f ../docker-compose.yml run --rm -T certbot certonly \
     --webroot -w /var/www/certbot \
     -d "$DOMAIN" \
-    --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email
+    --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email </dev/null
 render https.conf.template "$DOMAIN"
 reload_nginx
 echo "HTTPS enabled for $DOMAIN."

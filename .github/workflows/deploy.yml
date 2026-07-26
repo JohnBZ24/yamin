@@ -48,11 +48,19 @@ jobs:
 
           echo "==> Rendering nginx config (idempotent; keeps HTTPS if enabled)"
           chmod +x nginx/setup.sh
-          ./nginx/setup.sh "$DOMAIN"
+          # </dev/null on every docker invocation below: this whole script is fed
+          # to `bash -s` over STDIN, so any command that reads STDIN eats the
+          # remaining lines. That failure is silent AND exits 0 — a deploy that
+          # reports success having built nothing.
+          ./nginx/setup.sh "$DOMAIN" </dev/null
 
           echo "==> Building and starting services"
-          docker compose pull postgres redis nginx certbot
-          docker compose up -d --build --remove-orphans
+          docker compose pull postgres redis nginx certbot </dev/null
+          # Serially, and not `up --build`: this box is a t3.micro with 1 GB of
+          # RAM, and two Node toolchains building at once thrash swap.
+          docker compose build backend-api </dev/null
+          docker compose build frontend </dev/null
+          docker compose up -d --remove-orphans </dev/null
 
           echo "==> Waiting for API readiness"
           for i in $(seq 1 30); do
