@@ -40,6 +40,12 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-return': 'warn',
       '@typescript-eslint/no-unsafe-assignment': 'warn',
       '@typescript-eslint/no-unsafe-enum-comparison': 'warn',
+      // Advisory, like the type-checked rules above. These fire mostly on test
+      // doubles and on async methods kept async for interface conformance —
+      // worth seeing, not worth failing a deploy over.
+      '@typescript-eslint/require-await': 'warn',
+      '@typescript-eslint/unbound-method': 'warn',
+      '@typescript-eslint/no-redundant-type-constituents': 'warn',
     },
   },
 );

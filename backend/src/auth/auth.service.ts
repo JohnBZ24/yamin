@@ -26,7 +26,10 @@ export class AuthService {
     throw new Error('Method not implemented.');
   }
 
-  verifyOtp(email: string, code: number): Promise<{
+  verifyOtp(
+    email: string,
+    code: number,
+  ): Promise<{
     token: string;
     refreshToken: string;
     tokenExpires: number;

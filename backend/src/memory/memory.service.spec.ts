@@ -87,7 +87,11 @@ describe('MemoryService', () => {
       repo.searchByEmbedding.mockResolvedValue([]);
       repo.listRecentNotes.mockResolvedValue([]);
 
-      const result = await service.ask({ question: 'capital of France?' }, 3, qr);
+      const result = await service.ask(
+        { question: 'capital of France?' },
+        3,
+        qr,
+      );
 
       const prompt = generateTextMock.mock.calls[0][0].prompt as string;
       expect(prompt).toMatch(/know NOTHING about this user's life/i);
@@ -97,7 +101,11 @@ describe('MemoryService', () => {
     });
 
     it('answers from retrieved memories and returns its sources', async () => {
-      const result = await service.ask({ question: 'who owns pricing?' }, 3, qr);
+      const result = await service.ask(
+        { question: 'who owns pricing?' },
+        3,
+        qr,
+      );
 
       expect(generateTextMock).toHaveBeenCalledTimes(1);
       expect(result.answer).toBe('Sarah does. [1]');
@@ -167,7 +175,9 @@ describe('MemoryService', () => {
       // findEntityById is userId-scoped, so a miss means absent-or-not-yours.
       // Both must look identical, or the API confirms other users' data exists.
       repo.findEntityById.mockResolvedValue(null);
-      await expect(service.getEntity(3, 99, qr)).rejects.toThrow(NotFoundException);
+      await expect(service.getEntity(3, 99, qr)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -182,7 +192,7 @@ describe('MemoryService', () => {
       expect(repo.mergeEntities).not.toHaveBeenCalled();
     });
 
-    it('refuses when the target is not the user\'s', async () => {
+    it("refuses when the target is not the user's", async () => {
       repo.findEntityById.mockResolvedValue(null);
       await expect(
         service.mergeEntities({ sourceIds: [4] }, 7, 3, qr),
@@ -190,7 +200,7 @@ describe('MemoryService', () => {
       expect(repo.mergeEntities).not.toHaveBeenCalled();
     });
 
-    it('refuses — and moves nothing — if ANY source is not the user\'s', async () => {
+    it("refuses — and moves nothing — if ANY source is not the user's", async () => {
       // The critical case: merge is a cross-row write. Getting ownership wrong
       // would splice one person's memories into another's.
       repo.findEntityById
@@ -207,7 +217,12 @@ describe('MemoryService', () => {
     it('merges when every id checks out', async () => {
       repo.findEntityById.mockResolvedValue(target as any);
 
-      const result = await service.mergeEntities({ sourceIds: [4, 6] }, 7, 3, qr);
+      const result = await service.mergeEntities(
+        { sourceIds: [4, 6] },
+        7,
+        3,
+        qr,
+      );
 
       expect(repo.mergeEntities).toHaveBeenCalledWith(
         { userId: 3, targetId: 7, sourceIds: [4, 6] },

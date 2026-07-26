@@ -85,9 +85,12 @@ describe('MemoryRepository.mergeEntities (real database)', () => {
 
   beforeEach(async () => {
     userId = (
-      await ds.query(`INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`, [
-        `merge-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@yamin.test`,
-      ])
+      await ds.query(
+        `INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`,
+        [
+          `merge-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@yamin.test`,
+        ],
+      )
     )[0].id;
 
     const t = async () =>
@@ -122,7 +125,10 @@ describe('MemoryRepository.mergeEntities (real database)', () => {
     await mention(dupA, transcriptB);
     await mention(dupB, transcriptB);
 
-    await repo.mergeEntities({ userId, targetId: keep, sourceIds: [dupA, dupB] }, qr);
+    await repo.mergeEntities(
+      { userId, targetId: keep, sourceIds: [dupA, dupB] },
+      qr,
+    );
     await qr.commitTransaction();
 
     const live = await liveNodes();
@@ -146,7 +152,10 @@ describe('MemoryRepository.mergeEntities (real database)', () => {
     await edge(sarah, dupB, 'RESPONSIBLE_FOR');
 
     await expect(
-      repo.mergeEntities({ userId, targetId: keep, sourceIds: [dupA, dupB] }, qr),
+      repo.mergeEntities(
+        { userId, targetId: keep, sourceIds: [dupA, dupB] },
+        qr,
+      ),
     ).resolves.toBeDefined();
     await qr.commitTransaction();
 
@@ -216,21 +225,22 @@ describe('MemoryRepository.mergeEntities (real database)', () => {
   it('inherits a description when the survivor has none', async () => {
     const keep = await node('Product', 'Pricing Page');
     const dup = await node('Task', 'pricing page');
-    await ds.query(`UPDATE "entity_node" SET "description" = $1 WHERE "id" = $2`, [
-      'The public pricing page',
-      dup,
-    ]);
+    await ds.query(
+      `UPDATE "entity_node" SET "description" = $1 WHERE "id" = $2`,
+      ['The public pricing page', dup],
+    );
 
     await repo.mergeEntities({ userId, targetId: keep, sourceIds: [dup] }, qr);
     await qr.commitTransaction();
 
-    const row = await ds.query(`SELECT "description" FROM "entity_node" WHERE "id" = $1`, [
-      keep,
-    ]);
+    const row = await ds.query(
+      `SELECT "description" FROM "entity_node" WHERE "id" = $1`,
+      [keep],
+    );
     expect(row[0].description).toBe('The public pricing page');
   });
 
-  it('reports the survivor\'s true mentionCount', async () => {
+  it("reports the survivor's true mentionCount", async () => {
     // Regression: this returned 0 while the database held the correct value,
     // because TypeORM's UPDATE ... RETURNING yields [rows, count], not rows —
     // so the API told the user their memories had vanished.
@@ -246,7 +256,10 @@ describe('MemoryRepository.mergeEntities (real database)', () => {
     await qr.commitTransaction();
 
     const actual = (
-      await ds.query(`SELECT "mentionCount" FROM "entity_node" WHERE "id" = $1`, [keep])
+      await ds.query(
+        `SELECT "mentionCount" FROM "entity_node" WHERE "id" = $1`,
+        [keep],
+      )
     )[0].mentionCount;
 
     expect(result.mentionCount).toBe(2);
@@ -287,9 +300,10 @@ describe('MemoryRepository search scoping (real database)', () => {
 
     const mkUser = async (tag: string) =>
       (
-        await ds.query(`INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`, [
-          `scope-${tag}-${process.pid}-${Date.now()}@yamin.test`,
-        ])
+        await ds.query(
+          `INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`,
+          [`scope-${tag}-${process.pid}-${Date.now()}@yamin.test`],
+        )
       )[0].id as number;
 
     userA = await mkUser('a');
@@ -311,7 +325,7 @@ describe('MemoryRepository search scoping (real database)', () => {
     await ds?.destroy();
   });
 
-  it('never returns another user\'s memories', async () => {
+  it("never returns another user's memories", async () => {
     const embedding = Array.from({ length: 1536 }, () => 0.01);
 
     const asB = await repo.searchByEmbedding({

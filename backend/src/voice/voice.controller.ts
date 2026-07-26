@@ -100,6 +100,11 @@ export class VoiceController {
     @Query('limit') limit = 10,
     @TransactionQueryRunner() queryRunner: QueryRunner,
   ) {
-    return this.voiceService.getUserHistory(userId, Number(page), Number(limit), queryRunner);
+    return this.voiceService.getUserHistory(
+      userId,
+      Number(page),
+      Number(limit),
+      queryRunner,
+    );
   }
 }

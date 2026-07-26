@@ -22,7 +22,9 @@ export class EntityNodeRepository {
     private readonly repository: Repository<EntityNodeEntity>,
   ) {}
 
-  private getRepository(queryRunner?: QueryRunner): Repository<EntityNodeEntity> {
+  private getRepository(
+    queryRunner?: QueryRunner,
+  ): Repository<EntityNodeEntity> {
     if (queryRunner) {
       return queryRunner.manager.getRepository(EntityNodeEntity);
     }
@@ -66,7 +68,13 @@ export class EntityNodeRepository {
          "description"     = COALESCE(EXCLUDED."description", "entity_node"."description"),
          "updatedAt"       = now()
        RETURNING *`,
-      [data.userId, data.type, data.name, data.normalizedName, data.description],
+      [
+        data.userId,
+        data.type,
+        data.name,
+        data.normalizedName,
+        data.description,
+      ],
     );
 
     return EntityNodeMapper.toDomain(rows[0] as EntityNodeEntity);
@@ -115,7 +123,9 @@ export class EntityNodeRepository {
   async findLinkingCandidates(
     { userId, limit }: { userId: number; limit: number },
     queryRunner?: QueryRunner,
-  ): Promise<Array<{ type: string; name: string; description: string | null }>> {
+  ): Promise<
+    Array<{ type: string; name: string; description: string | null }>
+  > {
     const repository = this.getRepository(queryRunner);
     // TimeReference is deliberately excluded. This list is handed to the
     // extractor with "reuse the EXACT name — do not invent a variant", which is

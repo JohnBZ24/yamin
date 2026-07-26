@@ -51,9 +51,7 @@ export class HealthService implements OnModuleDestroy {
   async ready(): Promise<HealthReport> {
     const info: HealthReport['info'] = {};
 
-    info.database = await this.check(() =>
-      this.dataSource.query('SELECT 1'),
-    );
+    info.database = await this.check(() => this.dataSource.query('SELECT 1'));
     info.redis = await this.check(() => this.redis.ping());
 
     const status = Object.values(info).every((d) => d.status === 'up')

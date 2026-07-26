@@ -26,7 +26,9 @@ describe('VoiceService', () => {
   let queue: { add: jest.Mock };
   let service: VoiceService;
 
-  const makeTranscript = (overrides: Partial<VoiceTranscript>): VoiceTranscript =>
+  const makeTranscript = (
+    overrides: Partial<VoiceTranscript>,
+  ): VoiceTranscript =>
     ({
       id: 1,
       fileUuid: 'aaaaaaaa-0000-0000-0000-000000000000',
@@ -46,7 +48,9 @@ describe('VoiceService', () => {
     repo = {
       create: jest.fn(async (data) => makeTranscript(data)),
       findOne: jest.fn(async () => null),
-      update: jest.fn(async (id, payload) => makeTranscript({ id, ...payload })),
+      update: jest.fn(async (id, payload) =>
+        makeTranscript({ id, ...payload }),
+      ),
       softDeleteWithMentions: jest.fn(async () => undefined),
     };
     queue = { add: jest.fn(async () => undefined) };
@@ -76,8 +80,14 @@ describe('VoiceService', () => {
     });
 
     it('derives Content-Type from the extension instead of hardcoding audio/mpeg', async () => {
-      const wav = await service.generatePresignedUrl({ fileExtension: '.wav' }, USER);
-      const m4a = await service.generatePresignedUrl({ fileExtension: '.m4a' }, USER);
+      const wav = await service.generatePresignedUrl(
+        { fileExtension: '.wav' },
+        USER,
+      );
+      const m4a = await service.generatePresignedUrl(
+        { fileExtension: '.m4a' },
+        USER,
+      );
 
       expect(wav.contentType).toBe('audio/wav');
       expect(m4a.contentType).toBe('audio/mp4');
@@ -94,7 +104,10 @@ describe('VoiceService', () => {
         .mockResolvedValueOnce(foreign);
 
       await expect(
-        service.submitToQueue({ fileUuid: foreign.fileUuid, rawText: 'x' }, USER),
+        service.submitToQueue(
+          { fileUuid: foreign.fileUuid, rawText: 'x' },
+          USER,
+        ),
       ).rejects.toThrow(NotFoundException);
 
       expect(repo.create).not.toHaveBeenCalled();

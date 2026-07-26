@@ -16,7 +16,10 @@ import { OpenRouterClient } from '../ai/openrouter.client';
 import { EMBEDDING_PROVIDER } from '../ai/providers/embedding.provider';
 import type { EmbeddingProvider } from '../ai/providers/embedding.provider';
 import { normalizeEntityName } from '../voice/domain/graph-vocabulary';
-import { MemoryRepository, MemoryHit } from './infrastructure/memory.repository';
+import {
+  MemoryRepository,
+  MemoryHit,
+} from './infrastructure/memory.repository';
 import { ChatMessageRepository } from './infrastructure/chat-message.repository';
 import { VoiceService } from '../voice/voice.service';
 import { SearchMemoryDto } from './dto/search-memory.dto';
@@ -52,7 +55,10 @@ const NO_SUBSTANCE_PATTERNS = [
   /nothing to (store|remember)/i,
 ];
 
-function hasSubstance(row: { rawText: string | null; summary: string | null }): boolean {
+function hasSubstance(row: {
+  rawText: string | null;
+  summary: string | null;
+}): boolean {
   const body = row.rawText?.trim() || row.summary?.trim() || '';
   if (!body) return false;
   // The junk marker lives in the SUMMARY (that's where the extractor wrote
@@ -231,7 +237,11 @@ export class MemoryService {
     sources: AskSource[];
   }> {
     const conversationUuid = dto.conversationUuid ?? randomUUID();
-    const recent = await this.recentTurns(userId, conversationUuid, queryRunner);
+    const recent = await this.recentTurns(
+      userId,
+      conversationUuid,
+      queryRunner,
+    );
 
     const ai = this.configService.getOrThrow('ai', { infer: true });
     const { text } = await generateText({
@@ -267,7 +277,11 @@ export class MemoryService {
     queryRunner?: QueryRunner,
   ): Promise<void> {
     const conversationUuid = dto.conversationUuid ?? randomUUID();
-    const recent = await this.recentTurns(userId, conversationUuid, queryRunner);
+    const recent = await this.recentTurns(
+      userId,
+      conversationUuid,
+      queryRunner,
+    );
 
     sink.meta({ conversationUuid, kind: 'chat', sources: [] });
 
@@ -299,7 +313,7 @@ export class MemoryService {
     return [
       PERSONA,
       '',
-      'This message is NOT a question about the user\'s stored notes — it is small',
+      "This message is NOT a question about the user's stored notes — it is small",
       'talk, a question about you, or a request for your view on something general.',
       'Answer it properly; do not deflect to "I only know what you tell me".',
       '',
@@ -472,7 +486,11 @@ export class MemoryService {
     // an answer that vanishes on navigation isn't memory.
     const conversationUuid = dto.conversationUuid ?? randomUUID();
     const limit = dto.limit ?? 6;
-    const { results } = await this.search({ q: dto.question, limit }, userId, queryRunner);
+    const { results } = await this.search(
+      { q: dto.question, limit },
+      userId,
+      queryRunner,
+    );
 
     // A note whose transcription produced nothing carries no information, but
     // its summary still reads "does not contain any discernible information" —
@@ -494,7 +512,9 @@ export class MemoryService {
     // latest. Without this distinction "what should I do about burnout?" gets
     // answered with "Given your Monday deadline with Karim…", because the model
     // cannot tell a padded context from a relevant one.
-    let grounding: 'matched' | 'recent' | 'none' = isFocused ? 'matched' : 'recent';
+    let grounding: 'matched' | 'recent' | 'none' = isFocused
+      ? 'matched'
+      : 'recent';
 
     if (!isFocused) {
       const recent = (
@@ -586,7 +606,7 @@ export class MemoryService {
         context,
       ],
       none: () => [
-        'Memories: none. You currently know NOTHING about this user\'s life —',
+        "Memories: none. You currently know NOTHING about this user's life —",
         'no people, no plans, no events. Answer the general part of their question',
         'from your own understanding, and say plainly that you have nothing stored',
         'on it yet.',
@@ -594,59 +614,61 @@ export class MemoryService {
     }[grounding]();
 
     const prompt = [
-        PERSONA,
-        '',
-        'Who is who — read the question with these fixed:',
-        '- "I", "me", "my" in the question mean THE USER. Every memory below is',
-        '  something the user said. They are the user\'s stories, not yours.',
-        '- "you", "your" in the question mean YOU, Yamin. You have no memories or',
-        '  stories of your own — you only hold theirs.',
-        '- So "what did I tell you about X" = "what did the USER say about X".',
-        '  Never read it as you having told them something. Never answer that you',
-        '  have no memories of your own; that is not what is being asked.',
-        '',
-        'You answer in two different registers, and must not mix them up:',
-        '',
-        '1. THEIR LIFE — the people, plans, events, and facts of this user.',
-        '   This comes ONLY from the numbered memories. Never guess a name, date,',
-        '   number, or relationship that is not written there. Cite what you use',
-        '   as [1], [2]. If the memories do not answer it, say so plainly.',
-        '   Never dress up a general fact as something they told you.',
-        '',
-        '2. EVERYTHING ELSE — what you are, how something works, general knowledge,',
-        '   advice, your opinion. Answer from your own understanding. Cite nothing.',
-        '',
-        'Make the seam visible in your wording, so they always know which they got:',
-        '  "You told me **Karim** wants the report Monday [1]" — from their notes.',
-        '  "I don\'t have anything from you on that, but generally…" — your own.',
-        '',
-        'Reading the memories:',
-        '- They are in the order they were recorded, oldest first.',
-        '- They are fragments of the user talking over time, not standalone facts.',
-        '  A memory that starts mid-thought ("because...", "and then...") continues',
-        '  the one recorded just before it. Read them together.',
-        '- If two memories conflict, the LATER one wins — the user changed their',
-        '  mind or corrected themselves. Answer with the current state. Mention the',
-        '  change only if it is the point of the question. Never refuse because',
-        '  memories disagree.',
-        '- If the question asks for a recap of everything ("what have I told you",',
-        '  "remind me of all the stories"), summarise the memories below as a short',
-        '  grouped list of what the user has recorded. That IS the answer — do not',
-        '  say you have nothing.',
-        '- Keep citations [1] as plain inline text.',
-        '',
-        ...(recentTurns.length
-          ? [
-              'The conversation so far — a short question like "operation of what?" or',
-              '"and his mom?" continues THIS thread; read it that way:',
-              ...recentTurns.map((t) => `User: ${t.question}\nYamin: ${t.answer}`),
-              '',
-            ]
-          : []),
-        `Question: ${dto.question}`,
-        '',
-        ...memoriesBlock,
-      ].join('\n');
+      PERSONA,
+      '',
+      'Who is who — read the question with these fixed:',
+      '- "I", "me", "my" in the question mean THE USER. Every memory below is',
+      "  something the user said. They are the user's stories, not yours.",
+      '- "you", "your" in the question mean YOU, Yamin. You have no memories or',
+      '  stories of your own — you only hold theirs.',
+      '- So "what did I tell you about X" = "what did the USER say about X".',
+      '  Never read it as you having told them something. Never answer that you',
+      '  have no memories of your own; that is not what is being asked.',
+      '',
+      'You answer in two different registers, and must not mix them up:',
+      '',
+      '1. THEIR LIFE — the people, plans, events, and facts of this user.',
+      '   This comes ONLY from the numbered memories. Never guess a name, date,',
+      '   number, or relationship that is not written there. Cite what you use',
+      '   as [1], [2]. If the memories do not answer it, say so plainly.',
+      '   Never dress up a general fact as something they told you.',
+      '',
+      '2. EVERYTHING ELSE — what you are, how something works, general knowledge,',
+      '   advice, your opinion. Answer from your own understanding. Cite nothing.',
+      '',
+      'Make the seam visible in your wording, so they always know which they got:',
+      '  "You told me **Karim** wants the report Monday [1]" — from their notes.',
+      '  "I don\'t have anything from you on that, but generally…" — your own.',
+      '',
+      'Reading the memories:',
+      '- They are in the order they were recorded, oldest first.',
+      '- They are fragments of the user talking over time, not standalone facts.',
+      '  A memory that starts mid-thought ("because...", "and then...") continues',
+      '  the one recorded just before it. Read them together.',
+      '- If two memories conflict, the LATER one wins — the user changed their',
+      '  mind or corrected themselves. Answer with the current state. Mention the',
+      '  change only if it is the point of the question. Never refuse because',
+      '  memories disagree.',
+      '- If the question asks for a recap of everything ("what have I told you",',
+      '  "remind me of all the stories"), summarise the memories below as a short',
+      '  grouped list of what the user has recorded. That IS the answer — do not',
+      '  say you have nothing.',
+      '- Keep citations [1] as plain inline text.',
+      '',
+      ...(recentTurns.length
+        ? [
+            'The conversation so far — a short question like "operation of what?" or',
+            '"and his mom?" continues THIS thread; read it that way:',
+            ...recentTurns.map(
+              (t) => `User: ${t.question}\nYamin: ${t.answer}`,
+            ),
+            '',
+          ]
+        : []),
+      `Question: ${dto.question}`,
+      '',
+      ...memoriesBlock,
+    ].join('\n');
 
     return { conversationUuid, prompt, sources };
   }
@@ -817,7 +839,11 @@ export class MemoryService {
   }
 
   /** Every turn of one conversation, oldest first. */
-  async getChat(userId: number, conversationUuid: string, queryRunner?: QueryRunner) {
+  async getChat(
+    userId: number,
+    conversationUuid: string,
+    queryRunner?: QueryRunner,
+  ) {
     const turns = await this.chatMessageRepository.listTurns(
       { userId, conversationUuid },
       queryRunner,
@@ -856,7 +882,12 @@ export class MemoryService {
     return { nodes, edges };
   }
 
-  async findEntities(userId: number, q: string, limit = 20, queryRunner?: QueryRunner) {
+  async findEntities(
+    userId: number,
+    q: string,
+    limit = 20,
+    queryRunner?: QueryRunner,
+  ) {
     return this.memoryRepository.searchEntitiesByName(
       { userId, normalizedQuery: normalizeEntityName(q), limit },
       queryRunner,

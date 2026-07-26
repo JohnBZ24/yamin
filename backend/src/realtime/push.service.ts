@@ -90,13 +90,17 @@ export class PushService {
         body: JSON.stringify(messages),
       });
       if (!res.ok) {
-        this.logger.error(`Expo push HTTP ${res.status}: ${await res.text().catch(() => '')}`);
+        this.logger.error(
+          `Expo push HTTP ${res.status}: ${await res.text().catch(() => '')}`,
+        );
         return 0;
       }
       const json = (await res.json()) as { data?: ExpoTicket[] };
       tickets = json.data ?? [];
     } catch (error) {
-      this.logger.error(`Expo push request failed: ${(error as Error).message}`);
+      this.logger.error(
+        `Expo push request failed: ${(error as Error).message}`,
+      );
       return 0;
     }
 
@@ -110,7 +114,9 @@ export class PushService {
         // A token dies when the app is uninstalled. Keeping it means retrying a
         // guaranteed failure on every future reminder, forever.
         if (ticket.details?.error === 'DeviceNotRegistered') {
-          this.logger.warn('Dropping a push token Expo reports as unregistered');
+          this.logger.warn(
+            'Dropping a push token Expo reports as unregistered',
+          );
           await this.removeToken(rows[i].token).catch(() => undefined);
         } else {
           this.logger.warn(`Expo push rejected a message: ${ticket.message}`);

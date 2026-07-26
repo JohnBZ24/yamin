@@ -8,7 +8,10 @@ import { EMBEDDING_PROVIDER } from './providers/embedding.provider';
 import { STT_PROVIDER } from './providers/stt.provider';
 import { OpenRouterEmbeddingProvider } from './providers/openrouter-embedding.provider';
 import { OpenRouterSttProvider } from './providers/openrouter-stt.provider';
-import { MockEmbeddingProvider, MockSttProvider } from './providers/mock.providers';
+import {
+  MockEmbeddingProvider,
+  MockSttProvider,
+} from './providers/mock.providers';
 
 /**
  * Provider selection happens once, here, at wiring time — driven by the
@@ -29,7 +32,11 @@ import { MockEmbeddingProvider, MockSttProvider } from './providers/mock.provide
     MockSttProvider,
     {
       provide: EMBEDDING_PROVIDER,
-      inject: [ConfigService, OpenRouterEmbeddingProvider, MockEmbeddingProvider],
+      inject: [
+        ConfigService,
+        OpenRouterEmbeddingProvider,
+        MockEmbeddingProvider,
+      ],
       useFactory: (
         configService: ConfigService<AllConfigType>,
         real: OpenRouterEmbeddingProvider,

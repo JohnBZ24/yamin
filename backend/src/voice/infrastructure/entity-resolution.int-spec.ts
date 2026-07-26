@@ -1,6 +1,9 @@
 import { DataSource, QueryRunner } from 'typeorm';
 
-import { EntityNodeType, normalizeEntityName } from '../domain/graph-vocabulary';
+import {
+  EntityNodeType,
+  normalizeEntityName,
+} from '../domain/graph-vocabulary';
 
 /**
  * Integration tests against a real Postgres.
@@ -53,7 +56,11 @@ describe('entity resolution (real database)', () => {
     await qr.release();
   });
 
-  const resolve = async (type: EntityNodeType, name: string, description: string | null = null) => {
+  const resolve = async (
+    type: EntityNodeType,
+    name: string,
+    description: string | null = null,
+  ) => {
     const rows = await qr.query(
       `INSERT INTO "entity_node"
          ("userId","type","name","normalizedName","description","mentionCount","lastMentionedAt")
@@ -82,7 +89,10 @@ describe('entity resolution (real database)', () => {
   it('resolves case and punctuation variants to one node', async () => {
     const base = uniq('Acme Corp');
     const first = await resolve(EntityNodeType.Organization, base);
-    const second = await resolve(EntityNodeType.Organization, base.toUpperCase() + '.');
+    const second = await resolve(
+      EntityNodeType.Organization,
+      base.toUpperCase() + '.',
+    );
 
     expect(second.id).toBe(first.id);
   });
@@ -146,9 +156,10 @@ describe('entity resolution (real database)', () => {
   it('lets a soft-deleted name be relearned (partial index)', async () => {
     const name = uniq('Relearn');
     const first = await resolve(EntityNodeType.Person, name);
-    await qr.query(`UPDATE "entity_node" SET "deletedAt" = now() WHERE "id" = $1`, [
-      first.id,
-    ]);
+    await qr.query(
+      `UPDATE "entity_node" SET "deletedAt" = now() WHERE "id" = $1`,
+      [first.id],
+    );
 
     // The unique index is WHERE "deletedAt" IS NULL precisely so a merged-away
     // or deleted entity doesn't permanently block re-learning it.
@@ -175,9 +186,10 @@ describe('mention counting (real database)', () => {
     await ds.initialize();
 
     userId = (
-      await ds.query(`INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`, [
-        `mention-${process.pid}-${Date.now()}@yamin.test`,
-      ])
+      await ds.query(
+        `INSERT INTO "user" ("email","role") VALUES ($1,2) RETURNING "id"`,
+        [`mention-${process.pid}-${Date.now()}@yamin.test`],
+      )
     )[0].id;
 
     transcriptId = (
@@ -222,8 +234,12 @@ describe('mention counting (real database)', () => {
   };
 
   const count = async () =>
-    (await ds.query(`SELECT "mentionCount" FROM "entity_node" WHERE "id" = $1`, [nodeId]))[0]
-      .mentionCount;
+    (
+      await ds.query(
+        `SELECT "mentionCount" FROM "entity_node" WHERE "id" = $1`,
+        [nodeId],
+      )
+    )[0].mentionCount;
 
   it('counts a new mention exactly once', async () => {
     expect(await record()).toBe(true);

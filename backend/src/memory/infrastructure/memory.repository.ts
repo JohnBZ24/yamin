@@ -139,10 +139,7 @@ export class MemoryRepository {
 
   /** Entities mentioned by a set of notes — the graph context around a hit. */
   async findEntitiesForTranscripts(
-    {
-      userId,
-      transcriptIds,
-    }: { userId: number; transcriptIds: number[] },
+    { userId, transcriptIds }: { userId: number; transcriptIds: number[] },
     queryRunner?: QueryRunner,
   ): Promise<Array<EntitySummary & { voiceTranscriptId: number }>> {
     if (transcriptIds.length === 0) {

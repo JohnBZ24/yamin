@@ -27,8 +27,8 @@ export class ConverseDto {
   @ApiPropertyOptional({
     example: 'Asia/Beirut',
     description:
-      'IANA timezone of the device. Lets "remind me at 5" resolve against the '
-      + "user's clock when the message turns out to be a reminder request.",
+      'IANA timezone of the device. Lets "remind me at 5" resolve against the ' +
+      "user's clock when the message turns out to be a reminder request.",
   })
   @IsString()
   @IsOptional()

@@ -25,7 +25,11 @@ import {
 import { REALTIME_NOTIFIER } from '../realtime/realtime.constants';
 import type { RealtimeNotifier } from '../realtime/realtime.constants';
 import { safeTransaction } from '../utils/queryRunner/querry-runner-release-mechanism';
-import { describeNow, nextOccurrenceUtc, resolveTimezone } from '../utils/time/timezone';
+import {
+  describeNow,
+  nextOccurrenceUtc,
+  resolveTimezone,
+} from '../utils/time/timezone';
 
 /**
  * The extraction contract.
@@ -40,7 +44,7 @@ const EXTRACTION_SCHEMA = z.object({
   memorable: z
     .boolean()
     .describe(
-      'false when the note carries NO information about the user\'s life worth ' +
+      "false when the note carries NO information about the user's life worth " +
         'recalling later: greetings, tests ("you", "hello?"), meta-questions to ' +
         'the assistant ("who am I"), or bare acknowledgements. true whenever ' +
         'there is any real fact, person, plan, or correction in it.',
@@ -90,7 +94,10 @@ const EXTRACTION_SCHEMA = z.object({
         .string()
         .describe('Must exactly match a name in the nodes array.'),
       type: z.enum(EntityRelationType),
-      description: z.string().optional().describe('Context of the relationship'),
+      description: z
+        .string()
+        .optional()
+        .describe('Context of the relationship'),
     }),
   ),
 });
@@ -132,7 +139,11 @@ export class VoiceProcessor extends WorkerHost {
 
     if (!rawText) {
       this.logger.warn(`Job ${job.id} rawText is empty. Skipping processing.`);
-      await this.updateJobStatus(fileUuid, 'failed', 'Empty transcript received');
+      await this.updateJobStatus(
+        fileUuid,
+        'failed',
+        'Empty transcript received',
+      );
       return;
     }
 
@@ -153,7 +164,9 @@ export class VoiceProcessor extends WorkerHost {
       });
       const recentContext = recentNotes
         .toReversed() // oldest first, so it reads as a conversation
-        .map((note) => `- ${(note.rawText ?? note.summary ?? '').slice(0, 300)}`)
+        .map(
+          (note) => `- ${(note.rawText ?? note.summary ?? '').slice(0, 300)}`,
+        )
         .join('\n');
 
       // 2. Trigger Tools / Actions (e.g. Schedule reminders, create tasks)
@@ -210,7 +223,9 @@ export class VoiceProcessor extends WorkerHost {
         });
 
         if (!transcript) {
-          throw new Error(`Voice transcript record not found for UUID: ${fileUuid}`);
+          throw new Error(
+            `Voice transcript record not found for UUID: ${fileUuid}`,
+          );
         }
 
         // Resolve each extracted node to the user's canonical entity, so a
@@ -276,7 +291,9 @@ export class VoiceProcessor extends WorkerHost {
           // fact. Downgrade to the untyped RELATED_TO rather than drop: the
           // connection itself is usually real, only its label was junk.
           let relationType = rel.type;
-          if (!isRelationTypeCompatible(rel.type, rel.sourceType, rel.targetType)) {
+          if (
+            !isRelationTypeCompatible(rel.type, rel.sourceType, rel.targetType)
+          ) {
             relationType = EntityRelationType.RELATED_TO;
             downgradedRelations += 1;
           }
@@ -319,7 +336,9 @@ export class VoiceProcessor extends WorkerHost {
         );
       });
 
-      this.logger.log(`Job ${job.id} successfully processed and saved to database.`);
+      this.logger.log(
+        `Job ${job.id} successfully processed and saved to database.`,
+      );
 
       // 5. Emit completed event to the user's socket client in real-time
       await this.notifier.sendToUser(userId, 'voice-processed', {
@@ -329,9 +348,11 @@ export class VoiceProcessor extends WorkerHost {
         nodes: graphData.nodes,
         relations: graphData.relations,
       });
-
     } catch (error) {
-      this.logger.error(`Failed to process job ${job.id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Failed to process job ${job.id}: ${error.message}`,
+        error.stack,
+      );
 
       // Only mark failed and tell the user once BullMQ has exhausted its
       // retries. Reporting on every attempt would flag a note as failed while
@@ -407,7 +428,7 @@ export class VoiceProcessor extends WorkerHost {
         ...(recentContext
           ? [
               '',
-              'For context, the user\'s recent notes (oldest first) — use these to',
+              "For context, the user's recent notes (oldest first) — use these to",
               'understand what "he", "she", "it", or a bare follow-up refers to:',
               recentContext,
             ]
@@ -499,14 +520,20 @@ export class VoiceProcessor extends WorkerHost {
             // time has already gone by and it silently rolled to tomorrow — the
             // user reasonably read that as the app scheduling past dates.
             const sameDay =
-              new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(target) ===
-              new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+              new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(
+                target,
+              ) ===
+              new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(
+                now,
+              );
 
             const clockLabel = new Intl.DateTimeFormat('en-US', {
               timeZone: timezone,
               hour: 'numeric',
               minute: '2-digit',
-              ...(sameDay ? {} : { weekday: 'short', month: 'short', day: 'numeric' }),
+              ...(sameDay
+                ? {}
+                : { weekday: 'short', month: 'short', day: 'numeric' }),
             }).format(target);
 
             // Structured, not a bare string assigned to an outer closure
@@ -638,7 +665,7 @@ export class VoiceProcessor extends WorkerHost {
         '',
         ...(recentContext
           ? [
-              'CONVERSATION CONTEXT — the user\'s recent notes, oldest first. The new note',
+              "CONVERSATION CONTEXT — the user's recent notes, oldest first. The new note",
               'continues this thread. Use the context to RESOLVE references, never to',
               're-extract old facts:',
               recentContext,
@@ -687,7 +714,7 @@ export class VoiceProcessor extends WorkerHost {
         '  nodes; that someone likes them belongs in the relation description.',
         '- Prefer FEWER, better nodes. An empty nodes array is correct for a note that',
         '  names nothing durable. Do not pad the graph.',
-        '- Set memorable=false for notes with nothing about the user\'s life in them:',
+        "- Set memorable=false for notes with nothing about the user's life in them:",
         '  greetings, tests ("you", "hello"), questions about the assistant, bare',
         '  acknowledgements. For those, the summary must be a short neutral line like',
         '  "A test message — nothing to store." NEVER a sentence about what the note',
@@ -705,7 +732,7 @@ export class VoiceProcessor extends WorkerHost {
         '       relations: [Andrew Khoury -RELATED_TO-> Dota 2, description "loves playing it"]',
         '  "Fady\'s mom is in hospital"',
         '    -> nodes: [Person: Fady]',
-        '       relations: []  ; the mother is unnamed — record it in Fady\'s description, not as a node',
+        "       relations: []  ; the mother is unnamed — record it in Fady's description, not as a node",
         '',
         'SPELLING REFERENCE — names the user has used before:',
         knownList,
@@ -729,7 +756,7 @@ export class VoiceProcessor extends WorkerHost {
         '  person out of the nodes, and set the clarification field to one short',
         '  question naming the options ("Which Andrew do you mean — Andrew Khoury or',
         '  your cousin Andrew?"). Still extract everything else in the note that IS',
-        '  unambiguous; the user\'s answer will arrive as a later note and be linked',
+        "  unambiguous; the user's answer will arrive as a later note and be linked",
         '  through context then.',
         '',
         'Descriptions are LIVING state, not history. The description you emit for a',
@@ -737,7 +764,7 @@ export class VoiceProcessor extends WorkerHost {
         'what is still true, and apply what this note changes ("recovered from the',
         'operation", "moved to Paris", "no longer works at Acme"). Dropping an',
         'established fact is only correct when this note contradicts it.',
-        '- Every relation\'s source and target MUST also appear in the nodes array, with the same type and name.',
+        "- Every relation's source and target MUST also appear in the nodes array, with the same type and name.",
         '',
         `Voice note: "${text}"`,
       ].join('\n'),
@@ -746,9 +773,15 @@ export class VoiceProcessor extends WorkerHost {
     return result.object;
   }
 
-  private async updateJobStatus(fileUuid: string, status: string, errorMsg?: string) {
+  private async updateJobStatus(
+    fileUuid: string,
+    status: string,
+    errorMsg?: string,
+  ) {
     try {
-      const transcript = await this.voiceRepository.findOne({ fields: { fileUuid } as any });
+      const transcript = await this.voiceRepository.findOne({
+        fields: { fileUuid } as any,
+      });
       if (transcript) {
         await this.voiceRepository.update(transcript.id, {
           status,

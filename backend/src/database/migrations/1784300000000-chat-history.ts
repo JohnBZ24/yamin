@@ -40,7 +40,9 @@ export class ChatHistory1784300000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_chat_message_conversation"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_chat_message_conversation"`,
+    );
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_chat_message_user"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "chat_message"`);
   }

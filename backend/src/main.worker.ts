@@ -18,7 +18,10 @@ function startHeartbeat(): void {
       // worker itself; the healthcheck going stale is the signal.
     });
   void touch();
-  setInterval(touch, HEARTBEAT_INTERVAL_MS).unref();
+  // `void touch()` rather than passing `touch` directly: setInterval expects a
+  // void-returning callback, and handing it a promise-returning one is the
+  // shape that normally hides an unhandled rejection.
+  setInterval(() => void touch(), HEARTBEAT_INTERVAL_MS).unref();
 }
 
 /**

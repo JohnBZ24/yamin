@@ -81,20 +81,35 @@ const {
  * Task→Person and a single pair can't say that without also allowing
  * Person→Person.
  */
-export const RELATION_TYPE_CONSTRAINTS: Record<EntityRelationType, EndpointRule[]> = {
+export const RELATION_TYPE_CONSTRAINTS: Record<
+  EntityRelationType,
+  EndpointRule[]
+> = {
   [EntityRelationType.WORKS_FOR]: [
     { source: setOf(Person), target: setOf(Organization, Person, Project) },
   ],
   [EntityRelationType.MEMBER_OF]: [
-    { source: setOf(Person), target: setOf(Organization, Project, Event, Topic) },
+    {
+      source: setOf(Person),
+      target: setOf(Organization, Project, Event, Topic),
+    },
     { source: setOf(Organization), target: setOf(Organization) },
   ],
   [EntityRelationType.PARTICIPANT_IN]: [
-    { source: setOf(Person, Organization), target: setOf(Event, Project, Task, Topic) },
+    {
+      source: setOf(Person, Organization),
+      target: setOf(Event, Project, Task, Topic),
+    },
   ],
   [EntityRelationType.ASSIGNED_TO]: [
-    { source: setOf(Task, Project, Other), target: setOf(Person, Organization) },
-    { source: setOf(Person, Organization), target: setOf(Task, Project, Other) },
+    {
+      source: setOf(Task, Project, Other),
+      target: setOf(Person, Organization),
+    },
+    {
+      source: setOf(Person, Organization),
+      target: setOf(Task, Project, Other),
+    },
   ],
   [EntityRelationType.RESPONSIBLE_FOR]: [
     {
@@ -105,20 +120,44 @@ export const RELATION_TYPE_CONSTRAINTS: Record<EntityRelationType, EndpointRule[
   [EntityRelationType.PART_OF]: [
     {
       source: allExcept(TimeReference),
-      target: setOf(Organization, Project, Product, Topic, Event, Location, Other),
+      target: setOf(
+        Organization,
+        Project,
+        Product,
+        Topic,
+        Event,
+        Location,
+        Other,
+      ),
     },
   ],
   [EntityRelationType.LOCATED_IN]: [
-    { source: allExcept(TimeReference), target: setOf(Location, Organization, Event, Other) },
+    {
+      source: allExcept(TimeReference),
+      target: setOf(Location, Organization, Event, Other),
+    },
   ],
   [EntityRelationType.SCHEDULED_FOR]: [
-    { source: setOf(Event, Task, Project, Other), target: setOf(TimeReference, Event) },
+    {
+      source: setOf(Event, Task, Project, Other),
+      target: setOf(TimeReference, Event),
+    },
   ],
-  [EntityRelationType.KNOWS]: [{ source: setOf(Person), target: setOf(Person) }],
+  [EntityRelationType.KNOWS]: [
+    { source: setOf(Person), target: setOf(Person) },
+  ],
   [EntityRelationType.OWNS]: [
     {
       source: setOf(Person, Organization),
-      target: setOf(Product, Project, Organization, Location, Task, Topic, Other),
+      target: setOf(
+        Product,
+        Project,
+        Organization,
+        Location,
+        Task,
+        Topic,
+        Other,
+      ),
     },
   ],
   [EntityRelationType.DEPENDS_ON]: [
@@ -151,17 +190,19 @@ export function isRelationTypeCompatible(
  * later.
  */
 export function normalizeEntityName(name: string): string {
-  return name
-    .normalize('NFKD')
-    // Strip combining accents so "José" and "Jose" resolve together.
-    // Built from an escaped string rather than a regex literal: the range is
-    // raw combining marks, which are invisible in most editors and silently
-    // corrupted by a re-encode.
-    .replace(new RegExp('[\u0300-\u036f]', 'g'), '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    name
+      .normalize('NFKD')
+      // Strip combining accents so "José" and "Jose" resolve together.
+      // Built from an escaped string rather than a regex literal: the range is
+      // raw combining marks, which are invisible in most editors and silently
+      // corrupted by a re-encode.
+      .replace(new RegExp('[\u0300-\u036f]', 'g'), '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 const SELF_REFERENCES = new Set([

@@ -205,6 +205,6 @@ export class UserRepository {
     queryRunner?: QueryRunner;
   }): Promise<void> {
     const repository = this.getRepository(queryRunner);
-    await repository.softDelete(id as number);
+    await repository.softDelete(id);
   }
 }

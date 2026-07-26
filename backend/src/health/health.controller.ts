@@ -24,9 +24,7 @@ export class HealthController {
     // Must be a non-2xx when a dependency is down, or the orchestrator keeps
     // routing traffic to an instance that cannot serve it.
     res.status(
-      report.status === 'ok'
-        ? HttpStatus.OK
-        : HttpStatus.SERVICE_UNAVAILABLE,
+      report.status === 'ok' ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE,
     );
 
     return report;

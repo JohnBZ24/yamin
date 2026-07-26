@@ -27,7 +27,10 @@ describe('resolveCorsOptions', () => {
 
   describe('production', () => {
     const prod = () =>
-      configWith({ 'app.nodeEnv': 'production', 'app.frontendDomain': 'https://yamin.app' });
+      configWith({
+        'app.nodeEnv': 'production',
+        'app.frontendDomain': 'https://yamin.app',
+      });
 
     it('allows the configured frontend domain', () => {
       const options = resolveCorsOptions(prod(), logger);
@@ -63,7 +66,10 @@ describe('resolveCorsOptions', () => {
 
   describe('development', () => {
     const dev = () =>
-      configWith({ 'app.nodeEnv': 'development', 'app.frontendDomain': 'https://yamin.app' });
+      configWith({
+        'app.nodeEnv': 'development',
+        'app.frontendDomain': 'https://yamin.app',
+      });
 
     it('allows localhost on any port', () => {
       const options = resolveCorsOptions(dev(), logger);
@@ -84,7 +90,10 @@ describe('resolveCorsOptions', () => {
 
   it('allows requests with no Origin header (curl, native apps, same-origin)', () => {
     const options = resolveCorsOptions(
-      configWith({ 'app.nodeEnv': 'production', 'app.frontendDomain': 'https://yamin.app' }),
+      configWith({
+        'app.nodeEnv': 'production',
+        'app.frontendDomain': 'https://yamin.app',
+      }),
       logger,
     );
     expect(allows(options, undefined)).toBe(true);
@@ -92,7 +101,10 @@ describe('resolveCorsOptions', () => {
 
   it('sets credentials, which is why the origin can never be "*"', () => {
     const options = resolveCorsOptions(
-      configWith({ 'app.nodeEnv': 'production', 'app.frontendDomain': 'https://yamin.app' }),
+      configWith({
+        'app.nodeEnv': 'production',
+        'app.frontendDomain': 'https://yamin.app',
+      }),
       logger,
     );
     // A wildcard origin with credentials is rejected outright by browsers —

@@ -41,7 +41,8 @@ export class VoiceService {
     @InjectQueue('voice-processing') private readonly voiceQueue: Queue,
   ) {
     const accessKeyId = this.configService.get<string>('s3.accessKeyId');
-    const secretAccessKey = this.configService.get<string>('s3.secretAccessKey');
+    const secretAccessKey =
+      this.configService.get<string>('s3.secretAccessKey');
     const region = this.configService.get<string>('s3.region') || 'us-east-1';
 
     // Normalized once, used everywhere. A .env line like
@@ -75,7 +76,9 @@ export class VoiceService {
         responseChecksumValidation: 'WHEN_REQUIRED',
       });
     } else {
-      this.logger.warn('AWS S3 credentials not fully configured. Presigned URLs will fallback to mock signatures.');
+      this.logger.warn(
+        'AWS S3 credentials not fully configured. Presigned URLs will fallback to mock signatures.',
+      );
     }
   }
 
@@ -115,7 +118,8 @@ export class VoiceService {
       : `.${rawExtension}`;
     const key = `voice-notes/${fileUuid}${extension}`;
     const contentType = this.contentTypeFor(extension);
-    const bucket = this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
+    const bucket =
+      this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
 
     let uploadUrl = '';
     let downloadUrl = '';
@@ -126,7 +130,9 @@ export class VoiceService {
         Key: key,
         ContentType: contentType,
       });
-      uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
+      uploadUrl = await getSignedUrl(this.s3Client, command, {
+        expiresIn: 3600,
+      });
 
       const region = this.configService.get<string>('s3.region') || 'us-east-1';
       const endpoint = this.s3Endpoint;
@@ -192,7 +198,9 @@ export class VoiceService {
       // recording to redo, not a server fault, so it must not surface as 500.
       const status = (error as { statusCode?: number })?.statusCode;
       if (typeof status === 'number' && status >= 400 && status < 500) {
-        this.logger.warn(`STT rejected audio (${status}): ${(error as Error).message}`);
+        this.logger.warn(
+          `STT rejected audio (${status}): ${(error as Error).message}`,
+        );
         throw new UnprocessableEntityException(
           "Couldn't make out any speech in that recording — try again",
         );
@@ -257,9 +265,7 @@ export class VoiceService {
     // dequeue and look up the transcript before the INSERT was visible —
     // "Voice transcript record not found" — or, on rollback, left a job
     // pointing at a row that never existed.
-    await onAfterCommit(queryRunner, () =>
-      this.enqueueVoiceJob(dto, userId),
-    );
+    await onAfterCommit(queryRunner, () => this.enqueueVoiceJob(dto, userId));
 
     return transcript;
   }
@@ -314,7 +320,10 @@ export class VoiceService {
       throw new NotFoundException('Voice note not found');
     }
 
-    await this.voiceRepository.softDeleteWithMentions(transcript.id, queryRunner);
+    await this.voiceRepository.softDeleteWithMentions(
+      transcript.id,
+      queryRunner,
+    );
 
     await onAfterCommit(queryRunner, () =>
       this.deleteAudioObject(transcript.audioUrl),
@@ -330,11 +339,17 @@ export class VoiceService {
    * instead of failing the request.
    */
   private keyFromUrl(audioUrl: string): string | null {
-    const bucket = this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
+    const bucket =
+      this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
     try {
-      const path = decodeURIComponent(new URL(audioUrl).pathname).replace(/^\//, '');
+      const path = decodeURIComponent(new URL(audioUrl).pathname).replace(
+        /^\//,
+        '',
+      );
       // Path-style URLs (custom endpoint) carry the bucket as the first segment.
-      return path.startsWith(`${bucket}/`) ? path.slice(bucket.length + 1) : path;
+      return path.startsWith(`${bucket}/`)
+        ? path.slice(bucket.length + 1)
+        : path;
     } catch {
       return null;
     }
@@ -351,7 +366,8 @@ export class VoiceService {
     const key = this.keyFromUrl(audioUrl);
     if (!key) return audioUrl;
 
-    const bucket = this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
+    const bucket =
+      this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
     try {
       return await getSignedUrl(
         this.s3Client,
@@ -369,7 +385,8 @@ export class VoiceService {
   private async deleteAudioObject(audioUrl: string | null): Promise<void> {
     if (!audioUrl || !this.s3Client) return;
 
-    const bucket = this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
+    const bucket =
+      this.configService.get<string>('s3.bucket') || 'yamin-voice-notes';
     const key = this.keyFromUrl(audioUrl);
     if (!key) {
       this.logger.warn(`Could not parse audio URL for deletion: ${audioUrl}`);

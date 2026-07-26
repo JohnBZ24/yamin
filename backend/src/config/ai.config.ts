@@ -76,7 +76,8 @@ export default registerAs<AiConfig>('ai', () => {
     // language is wrong for a speaker who mixes Lebanese Arabic, English and
     // French mid-sentence — it just chooses which language gets mangled.
     sttLanguage: (process.env.AI_STT_LANGUAGE ?? '').trim(),
-    extractionModel: process.env.AI_EXTRACTION_MODEL || 'google/gemini-2.5-flash',
+    extractionModel:
+      process.env.AI_EXTRACTION_MODEL || 'google/gemini-2.5-flash',
     // Falls back to the extraction model so an unset var degrades gracefully
     // rather than crashing the boot.
     smartModel:

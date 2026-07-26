@@ -19,7 +19,10 @@ function isValidTimeZone(timeZone: string): boolean {
 }
 
 /** IANA identifier if valid, else the given fallback — never throws. */
-export function resolveTimezone(timeZone: string | undefined | null, fallback: string): string {
+export function resolveTimezone(
+  timeZone: string | undefined | null,
+  fallback: string,
+): string {
   return timeZone && isValidTimeZone(timeZone) ? timeZone : fallback;
 }
 
@@ -48,7 +51,14 @@ function partsOf(date: Date, timeZone: string): Record<string, number> {
 /** Offset in minutes such that `utcInstant = wallClockInZone - offset`. */
 function offsetMinutesAt(date: Date, timeZone: string): number {
   const p = partsOf(date, timeZone);
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const asUtc = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day,
+    p.hour,
+    p.minute,
+    p.second,
+  );
   return (asUtc - date.getTime()) / 60_000;
 }
 

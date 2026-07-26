@@ -15,7 +15,9 @@ export class VoiceTranscriptRepository {
     private readonly repository: Repository<VoiceTranscriptEntity>,
   ) {}
 
-  private getRepository(queryRunner?: QueryRunner): Repository<VoiceTranscriptEntity> {
+  private getRepository(
+    queryRunner?: QueryRunner,
+  ): Repository<VoiceTranscriptEntity> {
     if (queryRunner) {
       return queryRunner.manager.getRepository(VoiceTranscriptEntity);
     }
@@ -27,7 +29,9 @@ export class VoiceTranscriptRepository {
     queryRunner?: QueryRunner,
   ): Promise<VoiceTranscript> {
     const repository = this.getRepository(queryRunner);
-    const entity = repository.create(VoiceTranscriptMapper.toPersistence(data as VoiceTranscript));
+    const entity = repository.create(
+      VoiceTranscriptMapper.toPersistence(data as VoiceTranscript),
+    );
     const saved = await repository.save(entity);
     return VoiceTranscriptMapper.toDomain(saved);
   }
@@ -114,7 +118,9 @@ export class VoiceTranscriptRepository {
     excludeFileUuid: string;
     limit?: number;
     queryRunner?: QueryRunner;
-  }): Promise<Array<{ rawText: string | null; summary: string | null; createdAt: Date }>> {
+  }): Promise<
+    Array<{ rawText: string | null; summary: string | null; createdAt: Date }>
+  > {
     const repository = this.getRepository(queryRunner);
     const entities = await repository.find({
       where: {

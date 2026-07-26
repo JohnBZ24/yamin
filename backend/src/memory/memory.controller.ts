@@ -59,7 +59,8 @@ export class MemoryController {
 
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Ask a question; answered only from your own memories, with sources',
+    summary:
+      'Ask a question; answered only from your own memories, with sources',
   })
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(QueryRunnerInterceptor)
@@ -89,7 +90,8 @@ export class MemoryController {
 
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Reply to a message that is neither a memory nor a question about your notes',
+    summary:
+      'Reply to a message that is neither a memory nor a question about your notes',
     description:
       'Greetings, "what can you do?", and general advice. Answers from the model\'s own ' +
       'understanding and returns no sources, which is how the client labels it as general ' +
@@ -110,7 +112,9 @@ export class MemoryController {
   }
 
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'The people, projects and places you talk about most' })
+  @ApiOperation({
+    summary: 'The people, projects and places you talk about most',
+  })
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(QueryRunnerInterceptor)
   @Get('entities')
@@ -197,15 +201,14 @@ export class MemoryController {
   @UseGuards(JwtAuthGuard)
   @Get('chats')
   @HttpCode(HttpStatus.OK)
-  async chats(
-    @GetUser() userId: number,
-    @Query('limit') limit = 30,
-  ) {
+  async chats(@GetUser() userId: number, @Query('limit') limit = 30) {
     return this.memoryService.listChats(userId, Number(limit));
   }
 
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Every turn of one conversation, with its cited voice notes' })
+  @ApiOperation({
+    summary: 'Every turn of one conversation, with its cited voice notes',
+  })
   @UseGuards(JwtAuthGuard)
   @Get('chats/:uuid')
   @HttpCode(HttpStatus.OK)

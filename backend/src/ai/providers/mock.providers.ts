@@ -25,8 +25,9 @@ export class MockEmbeddingProvider implements EmbeddingProvider {
   constructor(private readonly configService: ConfigService<AllConfigType>) {}
 
   async embed(text: string): Promise<number[]> {
-    const dimensions = this.configService.getOrThrow('ai', { infer: true })
-      .embeddingDimensions;
+    const dimensions = this.configService.getOrThrow('ai', {
+      infer: true,
+    }).embeddingDimensions;
 
     this.logger.warn(
       `MOCK embedding for ${text.length} chars — not a real vector.`,

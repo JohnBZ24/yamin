@@ -1,6 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsNumber, IsString, Max, Min, IsOptional, MaxLength, MinLength } from 'class-validator';
+import {
+  IsNumber,
+  IsString,
+  Max,
+  Min,
+  IsOptional,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class SearchMemoryDto {
   @ApiProperty({ example: 'what did sarah say about pricing' })

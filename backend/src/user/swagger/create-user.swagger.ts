@@ -14,4 +14,3 @@ export function ApiCreateUser() {
     ApiResponse({ status: 409, description: 'Email already exists' }),
   );
 }
-

@@ -78,7 +78,12 @@ export class OpenRouterSttProvider implements SttProvider {
    */
   private async viaWhisper(
     { buffer, filename, mimeType }: TranscribeInput,
-    ai: { sttModel: string; sttLanguage: string; baseUrl: string; apiKey?: string },
+    ai: {
+      sttModel: string;
+      sttLanguage: string;
+      baseUrl: string;
+      apiKey?: string;
+    },
   ): Promise<string> {
     const form = new FormData();
     form.append('model', ai.sttModel);
@@ -119,7 +124,9 @@ export class OpenRouterSttProvider implements SttProvider {
   ): Promise<string> {
     const format = FORMAT_BY_MIME[mimeType.split(';')[0].trim().toLowerCase()];
     if (!format) {
-      this.logger.warn(`Unmapped audio MIME type "${mimeType}", sending as wav`);
+      this.logger.warn(
+        `Unmapped audio MIME type "${mimeType}", sending as wav`,
+      );
     }
 
     const res = await fetch(`${ai.baseUrl}/chat/completions`, {

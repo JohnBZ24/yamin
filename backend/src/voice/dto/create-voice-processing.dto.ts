@@ -17,7 +17,7 @@ export class CreateVoiceProcessingDto {
   @ApiPropertyOptional({
     example: 'Asia/Beirut',
     description:
-      "IANA timezone of the device, e.g. from Intl.DateTimeFormat().resolvedOptions().timeZone. " +
+      'IANA timezone of the device, e.g. from Intl.DateTimeFormat().resolvedOptions().timeZone. ' +
       'Lets a spoken absolute time ("remind me at 2:43") resolve against the ' +
       "user's actual clock instead of the server's UTC. Falls back to a " +
       'configured default when omitted or invalid.',

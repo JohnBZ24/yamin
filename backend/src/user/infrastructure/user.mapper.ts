@@ -25,7 +25,7 @@ export class UserMapper {
     const entity = new UserEntity();
 
     if (user.id !== undefined) {
-      entity.id = user.id as number;
+      entity.id = user.id;
     }
 
     entity.email = user.email;

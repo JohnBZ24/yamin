@@ -50,7 +50,9 @@ describe('normalizeEntityName', () => {
   });
 
   it('does NOT merge distinct entities that merely share a prefix', () => {
-    expect(normalizeEntityName('Sarah')).not.toBe(normalizeEntityName('Sarah Okonkwo'));
+    expect(normalizeEntityName('Sarah')).not.toBe(
+      normalizeEntityName('Sarah Okonkwo'),
+    );
     expect(normalizeEntityName('pricing page')).not.toBe(
       normalizeEntityName('pricing page completion'),
     );
@@ -169,7 +171,11 @@ describe('isRelationTypeCompatible', () => {
     for (const source of ENTITY_NODE_TYPES) {
       for (const target of ENTITY_NODE_TYPES) {
         expect(
-          isRelationTypeCompatible(EntityRelationType.RELATED_TO, source, target),
+          isRelationTypeCompatible(
+            EntityRelationType.RELATED_TO,
+            source,
+            target,
+          ),
         ).toBe(true);
       }
     }
@@ -194,6 +200,8 @@ describe('vocabulary', () => {
 
   it('has no duplicates — a duplicate enum value would break the JSON schema', () => {
     expect(new Set(ENTITY_NODE_TYPES).size).toBe(ENTITY_NODE_TYPES.length);
-    expect(new Set(ENTITY_RELATION_TYPES).size).toBe(ENTITY_RELATION_TYPES.length);
+    expect(new Set(ENTITY_RELATION_TYPES).size).toBe(
+      ENTITY_RELATION_TYPES.length,
+    );
   });
 });

@@ -38,17 +38,20 @@ export class VoiceGateway
   async handleConnection(socket: Socket) {
     try {
       const token =
-        socket.handshake.auth?.token ||
-        socket.handshake.query?.token;
+        socket.handshake.auth?.token || socket.handshake.query?.token;
 
       if (!token) {
-        this.logger.warn(`Disconnecting client: No JWT token found in handshake`);
+        this.logger.warn(
+          `Disconnecting client: No JWT token found in handshake`,
+        );
         socket.disconnect();
         return;
       }
 
       // Strip "Bearer " prefix if present
-      const cleanToken = token.startsWith('Bearer ') ? token.substring(7) : token;
+      const cleanToken = token.startsWith('Bearer ')
+        ? token.substring(7)
+        : token;
       const secret = this.configService.get('auth.secret', { infer: true });
 
       const payload = await this.jwtService.verifyAsync(cleanToken, { secret });
@@ -64,9 +67,13 @@ export class VoiceGateway
       socket.data.userId = userId;
       await socket.join(userRoom(userId));
 
-      this.logger.log(`Client connected: Socket ID ${socket.id} bound to User ID ${userId}`);
+      this.logger.log(
+        `Client connected: Socket ID ${socket.id} bound to User ID ${userId}`,
+      );
     } catch (err) {
-      this.logger.error(`WebSocket connection verification failed: ${err.message}`);
+      this.logger.error(
+        `WebSocket connection verification failed: ${err.message}`,
+      );
       socket.disconnect();
     }
   }
@@ -76,7 +83,9 @@ export class VoiceGateway
     // there is no membership bookkeeping left to do here.
     const userId = socket.data.userId;
     if (userId) {
-      this.logger.log(`Client disconnected: Socket ID ${socket.id} (User ID ${userId})`);
+      this.logger.log(
+        `Client disconnected: Socket ID ${socket.id} (User ID ${userId})`,
+      );
     }
   }
 
@@ -85,7 +94,11 @@ export class VoiceGateway
    * it has no socket.io server — and instead publishes through
    * RedisEmitterNotifier, which lands in this same room.
    */
-  async sendToUser(userId: number, event: string, payload: unknown): Promise<void> {
+  async sendToUser(
+    userId: number,
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
     this.server.to(userRoom(userId)).emit(event, payload);
     this.logger.log(`WS pushed event '${event}' to User ID ${userId}`);
   }

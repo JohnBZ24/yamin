@@ -35,7 +35,11 @@ export class ReminderProcessor extends WorkerHost {
       timestamp: new Date().toISOString(),
     });
 
-    const delivered = await this.push.sendToUser(userId, 'Yamin reminder', title);
+    const delivered = await this.push.sendToUser(
+      userId,
+      'Yamin reminder',
+      title,
+    );
 
     // Counts only — reminder titles are user PII and stdout ships to a log
     // aggregator with long retention.
