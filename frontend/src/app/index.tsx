@@ -55,19 +55,36 @@ export default function YaminScreen() {
   const feedRef = useRef<ScrollView>(null);
 
   /**
+   * Home's questions are one continuous thread. Without this every question
+   * started a fresh conversation, so "and his mother?" arrived with nothing to
+   * continue and the follow-up simply could not work.
+   */
+  const homeConversation = useRef<string | undefined>(undefined);
+
+  /**
    * Asking is a turn in the feed, not a separate panel: the question appears
    * immediately with a spinner and is filled in when the answer lands, so it
    * behaves like every other message here.
+   *
+   * Two lanes land here. `ask` is answered from the user's own notes and comes
+   * back with sources; `chitchat` is anything aimed at Yamin itself or general
+   * advice, answered without touching their memories. Routing chitchat through
+   * /ask would embed "what can you do?", match nothing, and then load 20 of
+   * their private notes into the prompt to answer a question about the app.
    */
-  const ask = async (question: string) => {
+  const ask = async (question: string, intent: 'ask' | 'chitchat' = 'ask') => {
     if (!token) return;
     const id = randomUuid();
     setAnswers((prev) => [
       ...prev,
-      { id, question, createdAt: new Date().toISOString(), result: null },
+      { id, question, createdAt: new Date().toISOString(), result: null, intent },
     ]);
     try {
-      const result = await api.ask(token, question);
+      const result =
+        intent === 'chitchat'
+          ? await api.reply(token, question, homeConversation.current)
+          : await api.ask(token, question, homeConversation.current);
+      homeConversation.current = result.conversationUuid;
       setAnswers((prev) =>
         prev.map((a) => (a.id === id ? { ...a, result } : a)),
       );

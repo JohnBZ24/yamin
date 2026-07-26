@@ -38,7 +38,7 @@ jobs:
           APP_DIR: ${{ secrets.APP_DIR }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
-            DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" APP_DIR="${APP_DIR:-\$HOME/yamin}" 'bash -s' <<'DEPLOY'
+            DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" APP_DIR="${APP_DIR:-\$HOME/app}" 'bash -s' <<'DEPLOY'
           set -euo pipefail
           cd "$APP_DIR"
 

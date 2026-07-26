@@ -6,6 +6,7 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { AskResponse } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
+import { MarkdownText } from './markdown-text';
 
 export type AnswerEntry = {
   id: string;
@@ -14,6 +15,8 @@ export type AnswerEntry = {
   /** null while the request is still in flight. */
   result: AskResponse | null;
   error?: string;
+  /** Which lane answered — only affects the wording shown while waiting. */
+  intent?: 'ask' | 'chitchat';
 };
 
 /**
@@ -22,9 +25,11 @@ export type AnswerEntry = {
  * NoteCard — your words on the right, Yamin's on the left — so one column reads
  * as a single history instead of two unrelated surfaces.
  *
- * The sources are not decoration; they are the reason to trust the answer. The
- * backend refuses to answer without retrieved context, so an answer here always
- * traces back to something you actually said.
+ * The sources are not decoration; they are the reason to trust the answer, and
+ * their ABSENCE is information too: an empty `sources` means Yamin answered
+ * from its own understanding rather than from anything you told it. That case
+ * is labelled rather than left ambiguous, because "I don't have that from you,
+ * but generally…" and "you told me…" must never look alike.
  */
 export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number }) {
   const { colors } = useTokens();
@@ -71,14 +76,23 @@ export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number
             <View style={styles.loadingRow}>
               <ActivityIndicator size="small" color={colors.brandText} />
               <Text style={[type.body, { color: colors.textMuted }]}>
-                Searching your memory…
+                {/* "Searching your memory…" is a lie on the chitchat lane — it
+                    never touches the notes. Saying so on stage is worse than
+                    saying nothing. */}
+                {entry.intent === 'chitchat' ? 'Thinking…' : 'Searching your memory…'}
               </Text>
             </View>
           ) : (
             <>
-              <Text style={[type.body, { color: colors.text }]}>
-                {entry.result.answer}
-              </Text>
+              <MarkdownText>{entry.result.answer}</MarkdownText>
+
+              {entry.result.sources.length === 0 && (
+                <View style={[styles.sources, { borderTopColor: colors.brandBorder }]}>
+                  <Text style={[type.label, { color: colors.textSubtle }]}>
+                    General answer — not from your memories
+                  </Text>
+                </View>
+              )}
 
               {entry.result.sources.length > 0 && (
                 <View style={[styles.sources, { borderTopColor: colors.brandBorder }]}>

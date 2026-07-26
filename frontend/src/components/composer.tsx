@@ -52,7 +52,7 @@ export function Composer({
     rawText: string;
     audioUrl: string | null;
   }) => void;
-  onAsk: (question: string) => void;
+  onAsk: (question: string, intent: 'ask' | 'chitchat') => void;
   showSuggestions: boolean;
 }) {
   const { colors } = useTokens();

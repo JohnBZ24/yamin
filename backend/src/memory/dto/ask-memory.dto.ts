@@ -15,7 +15,10 @@ export class AskMemoryDto {
   @ApiProperty({ example: 'who is handling the pricing page?' })
   @IsString()
   @MinLength(2)
-  @MaxLength(1000)
+  // Must match ClassifyIntentDto's ceiling. A spoken paragraph used to pass
+  // /classify at 4000 and then 422 here at 1000 — the routing said "ask" and
+  // the ask itself rejected the very same text.
+  @MaxLength(4000)
   question: string;
 
   @ApiPropertyOptional({

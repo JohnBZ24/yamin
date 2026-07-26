@@ -64,27 +64,44 @@ function hasSubstance(row: { rawText: string | null; summary: string | null }): 
   );
 }
 
-const INTENT_SCHEMA = z.object({
-  intent: z
-    .enum(['ask', 'remember'])
-    .describe('ask = retrieve from memory; remember = store, or act on, what was said'),
-});
-
 /**
- * The chat needs a third lane the composer doesn't: small talk. Routing
- * "hey, how are you?" into the remember-pipeline stored greetings as
- * memories; routing it into ask() produced "I don't have any memories about
- * that" — both read as a broken secretary.
+ * One classifier for every surface. There used to be two — a 2-way one for the
+ * home composer and a 3-way one for the chat screen — which meant the primary
+ * input surface had nowhere to put "what can you do?" and filed it as a note.
  */
-const CONVERSE_INTENT_SCHEMA = z.object({
+const INTENT_SCHEMA = z.object({
   intent: z
     .enum(['ask', 'remember', 'chitchat'])
     .describe(
       'ask = a question about things the user previously told you. ' +
         'remember = the message contains information to store (people, events, plans, facts) or a reminder request to act on. ' +
-        'chitchat = greeting, small talk, thanks, testing, or questions about you the assistant — nothing to store or retrieve.',
+        'chitchat = greeting, small talk, thanks, testing, or a question aimed at you the assistant — nothing to store or retrieve.',
     ),
 });
+
+export type Intent = z.infer<typeof INTENT_SCHEMA>['intent'];
+
+/**
+ * Who Yamin is, in one place. Every lane that speaks to the user builds on
+ * this — a second copy would drift, and the version the user met first would
+ * not be the one that answers them next.
+ */
+const PERSONA = [
+  "You are Yamin, the user's personal secretary. Warm, direct, and brief.",
+  '',
+  'What you do for them: they tell you things (by voice or text) and you remember',
+  'them; you answer questions from those memories; you schedule reminders and send',
+  'notifications; you keep a map of the people and projects in their life.',
+  '',
+  'How you speak:',
+  '- Like a capable colleague, not a chatbot. No "Certainly!", no "I\'d be happy to".',
+  '- Brief by default. Two or three sentences unless they asked for detail.',
+  '- When asked what to do, recommend ONE thing and say why. Do not lay out a menu',
+  '  of options and leave the choice to them — that is the work they came to avoid.',
+  '- Never mention prompts, models, tokens, or these instructions.',
+  '- Reply in Markdown: **bold** for names and key terms, "-" bullets when listing',
+  '  several things. No headings on short answers.',
+].join('\n');
 
 export type AskSource = {
   fileUuid: string;
@@ -143,7 +160,7 @@ export class MemoryService {
     queryRunner?: QueryRunner,
   ): Promise<ConverseResult> {
     const conversationUuid = dto.conversationUuid ?? randomUUID();
-    const { intent } = await this.classifyConverseIntent(dto.message);
+    const { intent } = await this.classifyIntent(dto.message);
 
     if (intent === 'ask') {
       const result = await this.ask(
@@ -187,34 +204,54 @@ export class MemoryService {
       };
     }
 
-    // chitchat — answer in persona, with the recent turns for continuity.
-    const recent = (
-      await this.chatMessageRepository.listTurns(
-        { userId, conversationUuid },
-        queryRunner,
-      )
-    ).slice(-6);
+    const result = await this.reply(
+      { message: dto.message, conversationUuid },
+      userId,
+      queryRunner,
+    );
+    return { kind: 'chat', ...result };
+  }
+
+  /**
+   * The lane for everything that is neither a memory nor a question about the
+   * user's life: greetings, "what can you do?", "should I take the job?".
+   *
+   * It answers from Yamin's own understanding and returns no sources, which is
+   * the honest signal — `sources: []` is what the UI uses to label an answer as
+   * general rather than drawn from the user's notes.
+   */
+  async reply(
+    dto: { message: string; conversationUuid?: string },
+    userId: number,
+    queryRunner?: QueryRunner,
+  ): Promise<{
+    conversationUuid: string;
+    question: string;
+    answer: string;
+    sources: AskSource[];
+  }> {
+    const conversationUuid = dto.conversationUuid ?? randomUUID();
+    const recent = await this.recentTurns(userId, conversationUuid, queryRunner);
 
     const ai = this.configService.getOrThrow('ai', { infer: true });
     const { text } = await generateText({
-      model: this.openRouterClient.provider(ai.extractionModel),
+      model: this.openRouterClient.provider(ai.smartModel),
+      // Some warmth here, unlike the ask lane: this is conversation, and a
+      // greeting answered identically every time reads as a canned response.
       temperature: 0.4,
-      prompt: this.chitchatPrompt(dto.message, recent),
+      prompt: this.replyPrompt(dto.message, recent),
     });
 
-    await this.chatMessageRepository.createTurn(
-      {
-        userId,
-        conversationUuid,
-        question: dto.message,
-        answer: text,
-        sources: [],
-      },
+    await this.persistTurn(
+      userId,
+      conversationUuid,
+      dto.message,
+      text,
+      [],
       queryRunner,
     );
 
     return {
-      kind: 'chat',
       conversationUuid,
       question: dto.message,
       answer: text,
@@ -222,29 +259,64 @@ export class MemoryService {
     };
   }
 
-  /** One source of truth for the small-talk persona — converse() and converseStream() both speak with it. */
-  private chitchatPrompt(
+  /** reply(), streaming. */
+  async replyStream(
+    dto: { message: string; conversationUuid?: string },
+    userId: number,
+    sink: ConverseStreamSink,
+    queryRunner?: QueryRunner,
+  ): Promise<void> {
+    const conversationUuid = dto.conversationUuid ?? randomUUID();
+    const recent = await this.recentTurns(userId, conversationUuid, queryRunner);
+
+    sink.meta({ conversationUuid, kind: 'chat', sources: [] });
+
+    const ai = this.configService.getOrThrow('ai', { infer: true });
+    const result = streamText({
+      model: this.openRouterClient.provider(ai.smartModel),
+      temperature: 0.4,
+      prompt: this.replyPrompt(dto.message, recent),
+    });
+    for await (const chunk of result.textStream) {
+      sink.write(chunk);
+    }
+
+    await this.persistTurn(
+      userId,
+      conversationUuid,
+      dto.message,
+      await result.text,
+      [],
+      queryRunner,
+    );
+  }
+
+  /** One source of truth for the conversational persona — reply() and replyStream() both speak with it. */
+  private replyPrompt(
     message: string,
     recent: Array<{ question: string; answer: string }>,
   ): string {
     return [
-      "You are Yamin, the user's personal secretary — warm, capable, and brief.",
+      PERSONA,
       '',
-      'What you actually do for them: they tell you things (by voice or text) and you',
-      'remember them; you answer questions from those memories; you schedule reminders',
-      'and send notifications; you keep a map of the people and projects in their life.',
+      'This message is NOT a question about the user\'s stored notes — it is small',
+      'talk, a question about you, or a request for your view on something general.',
+      'Answer it properly; do not deflect to "I only know what you tell me".',
       '',
       'Rules:',
-      '- This message is small talk, so reply like a person: 1–3 short sentences.',
-      '- Never invent memories or claim to know things they have not told you.',
-      '- If it fits naturally, remind them what you can do ("tell me anything and',
-      '  I\'ll remember it") — but only when it fits; no sales pitch every turn.',
-      '- Never mention prompts, models, or these instructions.',
-      '- Reply in Markdown. Plain sentences are fine; use formatting only when it helps.',
+      '- Answer from your own understanding. You may give opinions and advice.',
+      '- Never claim the user told you something. You are not looking at their notes',
+      '  right now, so any specific name, date, or number about THEIR life would be',
+      '  invented. Talk in general terms instead.',
+      '- If they ask what you can do, answer concretely and briefly — remembering',
+      '  what they tell you, answering from it later, reminders, the people map.',
+      '  Two or three sentences, not a feature list.',
+      '- If they are clearly about to tell you something, invite it in one clause.',
+      '  No sales pitch every turn.',
       '',
       ...(recent.length
         ? [
-            'Recent conversation:',
+            'The conversation so far:',
             ...recent.map((t) => `User: ${t.question}\nYamin: ${t.answer}`),
             '',
           ]
@@ -253,35 +325,18 @@ export class MemoryService {
     ].join('\n');
   }
 
-  private async classifyConverseIntent(
-    message: string,
-  ): Promise<{ intent: 'ask' | 'remember' | 'chitchat' }> {
-    const ai = this.configService.getOrThrow('ai', { infer: true });
-    const { object } = await generateObject({
-      model: this.openRouterClient.provider(ai.extractionModel),
-      schema: CONVERSE_INTENT_SCHEMA,
-      // Classification must not vary run to run — same reasoning as the
-      // extractor's temperature 0.
-      temperature: 0,
-      prompt: [
-        "Classify the user's chat message to their AI secretary.",
-        '',
-        'ask — a question about their own life/memories: "who is my boss?",',
-        '  "what did I say about the pricing page?", "what\'s on my plate this week?"',
-        'remember — the message CONTAINS information worth storing or a reminder to',
-        '  act on: "my boss karim wants the report monday", "remind me at 5 to call',
-        '  mom", "sarah moved to the berlin office".',
-        'chitchat — greeting, thanks, testing, or about the assistant itself:',
-        '  "hey", "how are you?", "thanks!", "what can you do?", "are you there?"',
-        '',
-        'When a message both greets AND carries information ("hey! btw the demo',
-        'moved to friday"), the information wins: remember.',
-        'A question about the user\'s stored life is ask even if phrased casually.',
-        '',
-        `Message: "${message}"`,
-      ].join('\n'),
-    });
-    return object;
+  /** The tail of this conversation, for continuity across turns. */
+  private async recentTurns(
+    userId: number,
+    conversationUuid: string,
+    queryRunner?: QueryRunner,
+    take = 6,
+  ): Promise<Array<{ question: string; answer: string }>> {
+    const turns = await this.chatMessageRepository.listTurns(
+      { userId, conversationUuid },
+      queryRunner,
+    );
+    return turns.slice(-take);
   }
 
   /**
@@ -329,15 +384,8 @@ export class MemoryService {
   }
 
   /**
-   * The actual secretary: answer a question from the user's own memories.
-   *
-   * Grounded strictly in retrieved notes and told to say when it doesn't know.
-   * An AI secretary that invents a meeting you never had is worse than useless
-   * — it's a liability — so the prompt forbids outside knowledge and the
-   * response always carries its sources for the user to check.
-   */
-  /**
-   * Is this something to remember, or something to answer?
+   * Is this something to remember, something to answer from their notes, or
+   * something to just reply to?
    *
    * The app used to make the user declare it with a toggle before typing, which
    * is work the model can do. Punctuation alone is not enough — "remind me when
@@ -348,7 +396,7 @@ export class MemoryService {
    * data the user meant to keep; mistaking a question for a note stores one
    * junk row and shows an unhelpful reply, which the user can see and delete.
    */
-  async classifyIntent(text: string): Promise<{ intent: 'ask' | 'remember' }> {
+  async classifyIntent(text: string): Promise<{ intent: Intent }> {
     const trimmed = text.trim();
     if (!trimmed) {
       return { intent: 'remember' };
@@ -367,11 +415,12 @@ export class MemoryService {
         prompt: [
           'You route one message for a personal memory assistant.',
           '',
-          'Reply "ask" when the user wants information back out of their memory:',
-          'questions about what they said, who someone is, what is outstanding.',
+          'Reply "ask" when the user wants information back out of THEIR OWN memory:',
+          'what they said, who someone is, what is outstanding.',
           '  "what did I say about pricing" -> ask',
           '  "when is the invoice due" -> ask',
           '  "who is Sarah" -> ask',
+          '  "what do you know about me" -> ask (it is about THEIR life, not about you)',
           '',
           'Reply "remember" when the user is telling you something to keep, or',
           'asking you to do something for them:',
@@ -379,7 +428,17 @@ export class MemoryService {
           '  "remind me to call the dentist" -> remember',
           '  "met Sarah from Acme today" -> remember',
           '',
-          'If it is genuinely ambiguous, answer "remember".',
+          'Reply "chitchat" for greetings, thanks, testing, questions aimed at YOU,',
+          'and requests for general advice or opinion that do not depend on their notes:',
+          '  "hey" / "how are you?" / "thanks!" -> chitchat',
+          '  "what can you do?" / "who are you?" -> chitchat',
+          '  "how should I handle a tough conversation?" -> chitchat',
+          '',
+          'When a message both greets AND carries information ("hey! btw the demo',
+          'moved to friday"), the information wins: remember.',
+          '',
+          'If torn between chitchat and remember, answer "remember": a lost note is',
+          'unrecoverable, while a mis-stored greeting is one row the user can delete.',
           '',
           `Message: ${trimmed}`,
         ].join('\n'),
@@ -404,15 +463,11 @@ export class MemoryService {
     dto: AskMemoryDto,
     userId: number,
     queryRunner?: QueryRunner,
-  ): Promise<
-    | { ready: false; conversationUuid: string; answer: string }
-    | {
-        ready: true;
-        conversationUuid: string;
-        prompt: string;
-        sources: AskSource[];
-      }
-  > {
+  ): Promise<{
+    conversationUuid: string;
+    prompt: string;
+    sources: AskSource[];
+  }> {
     // Every turn persists under a conversation id so the chat is reopenable —
     // an answer that vanishes on navigation isn't memory.
     const conversationUuid = dto.conversationUuid ?? randomUUID();
@@ -433,6 +488,13 @@ export class MemoryService {
     // instead of a handful of weak matches.
     const isFocused = usable.some((r) => r.similarity >= RELEVANCE_FLOOR);
     let rows: SearchResult[] = usable;
+
+    // WHY these rows are here, which the prompt must know. Recent-notes rows
+    // are NOT answers to the question — they are background that happened to be
+    // latest. Without this distinction "what should I do about burnout?" gets
+    // answered with "Given your Monday deadline with Karim…", because the model
+    // cannot tell a padded context from a relevant one.
+    let grounding: 'matched' | 'recent' | 'none' = isFocused ? 'matched' : 'recent';
 
     if (!isFocused) {
       const recent = (
@@ -457,15 +519,7 @@ export class MemoryService {
     }
 
     if (rows.length === 0) {
-      // Deliberately short-circuited: with no context the model would answer
-      // from its own world knowledge, and a confident answer sourced from
-      // nothing is exactly the failure this product cannot afford.
-      return {
-        ready: false,
-        conversationUuid,
-        answer:
-          "I don't have any memories about that yet. Tell me about it and I'll remember.",
-      };
+      grounding = 'none';
     }
 
     // The turns so far in THIS chat. Without them, a follow-up like
@@ -517,8 +571,30 @@ export class MemoryService {
       createdAt: result.createdAt,
     }));
 
+    // The memories block reads differently depending on WHY those rows are
+    // there. Getting this wrong in the "recent" case is the difference between
+    // a general answer and a confidently irrelevant one.
+    const memoriesBlock: string[] = {
+      matched: () => ['Memories:', context],
+      recent: () => [
+        'No memory closely MATCHES this question. The notes below are simply the',
+        'most recent ones, included as background. Use one only if it genuinely',
+        'bears on what was asked — it is perfectly fine to use none of them and',
+        'answer generally. Do not force them into the answer.',
+        '',
+        'Recent notes:',
+        context,
+      ],
+      none: () => [
+        'Memories: none. You currently know NOTHING about this user\'s life —',
+        'no people, no plans, no events. Answer the general part of their question',
+        'from your own understanding, and say plainly that you have nothing stored',
+        'on it yet.',
+      ],
+    }[grounding]();
+
     const prompt = [
-        "You are Yamin, the user's personal secretary. Answer their question using ONLY the memories below.",
+        PERSONA,
         '',
         'Who is who — read the question with these fixed:',
         '- "I", "me", "my" in the question mean THE USER. Every memory below is',
@@ -529,9 +605,23 @@ export class MemoryService {
         '  Never read it as you having told them something. Never answer that you',
         '  have no memories of your own; that is not what is being asked.',
         '',
-        'Rules:',
-        '- Use only the numbered memories. Never use outside knowledge.',
-        '- The memories are in the order they were recorded, oldest first.',
+        'You answer in two different registers, and must not mix them up:',
+        '',
+        '1. THEIR LIFE — the people, plans, events, and facts of this user.',
+        '   This comes ONLY from the numbered memories. Never guess a name, date,',
+        '   number, or relationship that is not written there. Cite what you use',
+        '   as [1], [2]. If the memories do not answer it, say so plainly.',
+        '   Never dress up a general fact as something they told you.',
+        '',
+        '2. EVERYTHING ELSE — what you are, how something works, general knowledge,',
+        '   advice, your opinion. Answer from your own understanding. Cite nothing.',
+        '',
+        'Make the seam visible in your wording, so they always know which they got:',
+        '  "You told me **Karim** wants the report Monday [1]" — from their notes.',
+        '  "I don\'t have anything from you on that, but generally…" — your own.',
+        '',
+        'Reading the memories:',
+        '- They are in the order they were recorded, oldest first.',
         '- They are fragments of the user talking over time, not standalone facts.',
         '  A memory that starts mid-thought ("because...", "and then...") continues',
         '  the one recorded just before it. Read them together.',
@@ -543,12 +633,7 @@ export class MemoryService {
         '  "remind me of all the stories"), summarise the memories below as a short',
         '  grouped list of what the user has recorded. That IS the answer — do not',
         '  say you have nothing.',
-        '- If they genuinely do not contain the answer, say so plainly. Do not guess.',
-        '- Cite the memories you used as [1], [2].',
-        '- Be brief and direct. Speak to the user as "you".',
-        '- Format the answer as Markdown: **bold** the names of people and things,',
-        '  use "-" bullet lists when listing several items. Keep citations [1] as',
-        '  plain inline text. No headings for short answers.',
+        '- Keep citations [1] as plain inline text.',
         '',
         ...(recentTurns.length
           ? [
@@ -560,11 +645,10 @@ export class MemoryService {
           : []),
         `Question: ${dto.question}`,
         '',
-        'Memories:',
-        context,
+        ...memoriesBlock,
       ].join('\n');
 
-    return { ready: true, conversationUuid, prompt, sources };
+    return { conversationUuid, prompt, sources };
   }
 
   private async persistTurn(
@@ -601,23 +685,6 @@ export class MemoryService {
     sources: AskSource[];
   }> {
     const prep = await this.prepareAsk(dto, userId, queryRunner);
-
-    if (!prep.ready) {
-      await this.persistTurn(
-        userId,
-        prep.conversationUuid,
-        dto.question,
-        prep.answer,
-        [],
-        queryRunner,
-      );
-      return {
-        conversationUuid: prep.conversationUuid,
-        question: dto.question,
-        answer: prep.answer,
-        sources: [],
-      };
-    }
 
     const ai = this.configService.getOrThrow('ai', { infer: true });
     const { text } = await generateText({
@@ -659,24 +726,6 @@ export class MemoryService {
   ): Promise<void> {
     const prep = await this.prepareAsk(dto, userId, queryRunner);
 
-    if (!prep.ready) {
-      sink.meta({
-        conversationUuid: prep.conversationUuid,
-        kind: 'answer',
-        sources: [],
-      });
-      sink.write(prep.answer);
-      await this.persistTurn(
-        userId,
-        prep.conversationUuid,
-        dto.question,
-        prep.answer,
-        [],
-        queryRunner,
-      );
-      return;
-    }
-
     // Meta must go out before the first text byte — it rides the response
     // HEADERS, which are sealed the moment the body starts.
     sink.meta({
@@ -717,7 +766,7 @@ export class MemoryService {
     queryRunner?: QueryRunner,
   ): Promise<void> {
     const conversationUuid = dto.conversationUuid ?? randomUUID();
-    const { intent } = await this.classifyConverseIntent(dto.message);
+    const { intent } = await this.classifyIntent(dto.message);
 
     if (intent === 'ask') {
       await this.askStream(
@@ -751,32 +800,10 @@ export class MemoryService {
       return;
     }
 
-    // chitchat
-    const recent = (
-      await this.chatMessageRepository.listTurns(
-        { userId, conversationUuid },
-        queryRunner,
-      )
-    ).slice(-6);
-
-    sink.meta({ conversationUuid, kind: 'chat', sources: [] });
-
-    const ai = this.configService.getOrThrow('ai', { infer: true });
-    const result = streamText({
-      model: this.openRouterClient.provider(ai.extractionModel),
-      temperature: 0.4,
-      prompt: this.chitchatPrompt(dto.message, recent),
-    });
-    for await (const chunk of result.textStream) {
-      sink.write(chunk);
-    }
-
-    await this.persistTurn(
+    await this.replyStream(
+      { message: dto.message, conversationUuid },
       userId,
-      conversationUuid,
-      dto.message,
-      await result.text,
-      [],
+      sink,
       queryRunner,
     );
   }

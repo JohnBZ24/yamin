@@ -180,6 +180,13 @@ export type AskResponse = {
   sources: AskSource[];
 };
 
+/**
+ * How the server routes one message. `chitchat` is the lane for anything aimed
+ * at Yamin itself ("what can you do?") or general advice — without it those
+ * questions were filed as notes.
+ */
+export type Intent = 'ask' | 'remember' | 'chitchat';
+
 export type ConverseResponse = AskResponse & {
   /** answer = grounded in memories; remembered = stored (and any reminder scheduled); chat = small talk. */
   kind: 'answer' | 'remembered' | 'chat';
@@ -365,12 +372,27 @@ export const api = {
       body: JSON.stringify({ token: pushToken, platform }),
     }),
 
-  /** Is this a question to answer, or something to remember? Server-side, so one box serves both. */
+  /**
+   * A question to answer, something to remember, or something to just reply to?
+   * Server-side, so one box serves all three.
+   */
   classify: (token: string, text: string) =>
-    request<{ intent: 'ask' | 'remember' }>('/memory/classify', {
+    request<{ intent: Intent }>('/memory/classify', {
       method: 'POST',
       token,
       body: JSON.stringify({ text }),
+    }),
+
+  /**
+   * The chitchat lane: greetings, "what can you do?", general advice. Returns
+   * the same shape as ask() with an empty `sources`, which is what tells the UI
+   * to label the answer as general rather than drawn from the user's memories.
+   */
+  reply: (token: string, message: string, conversationUuid?: string) =>
+    request<AskResponse>('/memory/reply', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ message, conversationUuid }),
     }),
 
   entities: (token: string, limit = 50) =>

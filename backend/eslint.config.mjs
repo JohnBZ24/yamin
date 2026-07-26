@@ -31,15 +31,15 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'warn',
       '@typescript-eslint/no-unused-vars': 'off',
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
-      '@typescript-eslint.io/rules/no-unsafe-call': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-member-access': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-return': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-assignment': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-enum-comparison': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-type-assertion': 'warn',
-      'typescript-eslint.io/rules/no-unsafe-type-parameters': 'warn',
-      // 'typescript-eslint.io/rules/no-unsafe-type-parameters': 'off',
-      // 'typescript-eslint.io/rules/no-unsafe-assignment': 'off',
+      // These were written as documentation URLs ("typescript-eslint.io/rules/x")
+      // rather than rule names. ESLint read the path prefix as a plugin it could
+      // not find and refused to start at all, so `npm run lint` — and with it the
+      // CI job that gates deployment — failed before linting a single file.
+      '@typescript-eslint/no-unsafe-call': 'warn',
+      '@typescript-eslint/no-unsafe-member-access': 'warn',
+      '@typescript-eslint/no-unsafe-return': 'warn',
+      '@typescript-eslint/no-unsafe-assignment': 'warn',
+      '@typescript-eslint/no-unsafe-enum-comparison': 'warn',
     },
   },
 );

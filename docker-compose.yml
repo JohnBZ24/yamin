@@ -197,10 +197,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Baked into the bundle at build time (see frontend/Dockerfile). Leave
-        # unset in production: the web app then talks to its own origin, which
-        # nginx routes to the API. Only set this when the API lives on a
-        # different origin than the page.
+        # Baked into the bundle at build time (see frontend/Dockerfile). MUST be
+        # set in production to the public origin nginx answers on — e.g.
+        # http://54.174.188.96 or https://your-domain. Leaving it empty does NOT
+        # produce same-origin requests: api.ts falls back to a localhost default,
+        # so an empty value ships a bundle that points every visitor's browser at
+        # their OWN machine. Port 80/443 (nginx), never :3000 — the API is
+        # loopback-bound.
         EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-}
     container_name: yamin_frontend
     restart: always

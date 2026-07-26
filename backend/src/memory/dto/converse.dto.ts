@@ -11,7 +11,9 @@ export class ConverseDto {
   @ApiProperty({ example: 'my boss karim wants the report by monday' })
   @IsString()
   @MinLength(1)
-  @MaxLength(2000)
+  // Same ceiling as ClassifyIntentDto and AskMemoryDto — a message that routes
+  // must not be rejected by whichever lane it routes into.
+  @MaxLength(4000)
   message: string;
 
   @ApiPropertyOptional({

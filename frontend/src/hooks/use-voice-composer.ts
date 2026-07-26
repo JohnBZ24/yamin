@@ -15,7 +15,7 @@ import {
 } from 'react-native-reanimated';
 
 import { useToast } from '../components/toast';
-import { api, transcribe } from '../lib/api';
+import { api, transcribe, type Intent } from '../lib/api';
 import { randomUuid } from '../lib/uuid';
 
 export type ComposerStage = 'idle' | 'reading' | 'uploading' | 'transcribing' | 'thinking';
@@ -72,7 +72,7 @@ export function useVoiceComposer({
     rawText: string;
     audioUrl: string | null;
   }) => void;
-  onAsk: (question: string) => void;
+  onAsk: (question: string, intent: 'ask' | 'chitchat') => void;
 }) {
   const toast = useToast();
   const [text, setText] = useState('');
@@ -131,25 +131,36 @@ export function useVoiceComposer({
 
   /**
    * One box, no mode switch: the server decides whether this is a question to
-   * answer or something to keep, and it defaults to keeping when unsure — the
-   * direction that never loses what you said.
+   * answer from memory, something to keep, or something to just reply to. It
+   * defaults to keeping when unsure — the direction that never loses what you
+   * said.
+   *
+   * `prepareStore` runs ONLY on the remember lane, and that is the point: the
+   * voice path puts its S3 upload in there, so a spoken question can no longer
+   * leave an orphaned audio object behind. The invariant holds because the
+   * callback is unreachable otherwise, not because two copies of this function
+   * both remembered to check.
    */
-  const route = async (value: string, audioUrl: string | null, fileUuid?: string) => {
+  const route = async (
+    value: string,
+    prepareStore: () => Promise<{ audioUrl: string | null; fileUuid?: string }>,
+  ) => {
     setStage('reading');
-    let intent: 'ask' | 'remember' = 'remember';
+    let intent: Intent = 'remember';
     try {
       ({ intent } = await api.classify(token, value));
     } catch {
       // Classifier unreachable — remembering is the recoverable default.
     }
 
-    if (intent === 'ask') {
+    if (intent === 'ask' || intent === 'chitchat') {
       setStage('idle');
       // The answer lands in the feed as its own turn; the box frees up now.
-      onAsk(value);
+      onAsk(value, intent);
       return;
     }
 
+    const { audioUrl, fileUuid } = await prepareStore();
     await send(value, audioUrl, fileUuid);
   };
 
@@ -159,7 +170,7 @@ export function useVoiceComposer({
 
     setText('');
     try {
-      await route(value, null);
+      await route(value, async () => ({ audioUrl: null }));
     } catch (err: any) {
       toast(err.message ?? 'Could not save that note', 'error');
       setStage('idle');
@@ -243,47 +254,37 @@ export function useVoiceComposer({
         return;
       }
 
-      setStage('reading');
-      let intent: 'ask' | 'remember' = 'remember';
-      try {
-        ({ intent } = await api.classify(token, rawText));
-      } catch {
-        // Keeping it is the recoverable default.
-      }
+      // Same router as the typed path. The upload lives inside the callback so
+      // it runs only when this really is something to keep.
+      await route(rawText, async () => {
+        setStage('uploading');
+        const { fileUuid, uploadUrl, downloadUrl, contentType } =
+          await api.presign(token, extension);
 
-      if (intent === 'ask') {
-        setStage('idle');
-        onAsk(rawText);
-        return;
-      }
+        let putRes: Response;
+        try {
+          putRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            // Must match the ContentType the backend signed with, or S3 rejects
+            // the PUT with a signature mismatch — so the backend tells us instead
+            // of both sides guessing.
+            headers: { 'Content-Type': contentType },
+            body: blob,
+          });
+        } catch {
+          // A network-level failure here surfaces as a bare "Failed to fetch".
+          // On web the usual culprit is the bucket refusing the browser's CORS
+          // preflight, which never reaches the request itself.
+          throw new Error(
+            'Audio upload failed before reaching storage — check your connection (on web: the S3 bucket needs a CORS rule allowing PUT)',
+          );
+        }
+        if (!putRes.ok) {
+          throw new Error(`Audio upload was rejected by storage (${putRes.status})`);
+        }
 
-      setStage('uploading');
-      const { fileUuid, uploadUrl, downloadUrl, contentType } =
-        await api.presign(token, extension);
-
-      let putRes: Response;
-      try {
-        putRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          // Must match the ContentType the backend signed with, or S3 rejects
-          // the PUT with a signature mismatch — so the backend tells us instead
-          // of both sides guessing.
-          headers: { 'Content-Type': contentType },
-          body: blob,
-        });
-      } catch {
-        // A network-level failure here surfaces as a bare "Failed to fetch".
-        // On web the usual culprit is the bucket refusing the browser's CORS
-        // preflight, which never reaches the request itself.
-        throw new Error(
-          'Audio upload failed before reaching storage — check your connection (on web: the S3 bucket needs a CORS rule allowing PUT)',
-        );
-      }
-      if (!putRes.ok) {
-        throw new Error(`Audio upload was rejected by storage (${putRes.status})`);
-      }
-
-      await send(rawText, downloadUrl, fileUuid);
+        return { audioUrl: downloadUrl, fileUuid };
+      });
     } catch (err: any) {
       toast(err.message ?? 'Something went wrong', 'error');
       setStage('idle');

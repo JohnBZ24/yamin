@@ -75,15 +75,38 @@ export class MemoryController {
 
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Decide whether a message is a question to answer or a note to keep',
+    summary:
+      'Route a message: a question to answer (ask), a note to keep (remember), or something to just reply to (chitchat)',
     description:
-      'Lets one input box serve both purposes instead of making the user pick a mode first.',
+      'Lets one input box serve all three purposes instead of making the user pick a mode first.',
   })
   @UseGuards(JwtAuthGuard)
   @Post('classify')
   @HttpCode(HttpStatus.OK)
   async classify(@Body() dto: ClassifyIntentDto) {
     return this.memoryService.classifyIntent(dto.text);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reply to a message that is neither a memory nor a question about your notes',
+    description:
+      'Greetings, "what can you do?", and general advice. Answers from the model\'s own ' +
+      'understanding and returns no sources, which is how the client labels it as general ' +
+      'rather than drawn from your memories. Separate from /ask on purpose: /ask embeds the ' +
+      'message and, finding no match, loads recent private notes into the prompt — pointless ' +
+      'and wrong for "hey".',
+  })
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(QueryRunnerInterceptor)
+  @Post('reply')
+  @HttpCode(HttpStatus.OK)
+  async reply(
+    @Body() dto: ConverseDto,
+    @GetUser() userId: number,
+    @TransactionQueryRunner() queryRunner: QueryRunner,
+  ) {
+    return this.memoryService.reply(dto, userId, queryRunner);
   }
 
   @ApiBearerAuth()

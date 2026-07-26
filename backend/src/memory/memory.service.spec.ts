@@ -6,8 +6,11 @@ import { MemoryService } from './memory.service';
 import { MemoryRepository } from './infrastructure/memory.repository';
 
 const generateTextMock = jest.fn();
+const generateObjectMock = jest.fn();
 jest.mock('ai', () => ({
   generateText: (...args: unknown[]) => generateTextMock(...args),
+  generateObject: (...args: unknown[]) => generateObjectMock(...args),
+  streamText: jest.fn(),
 }));
 
 // `@ai-sdk/openai` is ESM-only and reaches this suite transitively through
@@ -34,6 +37,7 @@ describe('MemoryService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     generateTextMock.mockResolvedValue({ text: 'Sarah does. [1]' });
+    generateObjectMock.mockResolvedValue({ object: { intent: 'ask' } });
 
     repo = {
       searchByEmbedding: jest.fn().mockResolvedValue([hit()]),
@@ -55,7 +59,12 @@ describe('MemoryService', () => {
         listTurns: jest.fn().mockResolvedValue([]),
       } as any,
       { submitToQueue: jest.fn().mockResolvedValue({}) } as any,
-      { getOrThrow: () => ({ extractionModel: 'test/model' }) } as unknown as ConfigService<any>,
+      {
+        getOrThrow: () => ({
+          extractionModel: 'test/model',
+          smartModel: 'test/smart-model',
+        }),
+      } as unknown as ConfigService<any>,
       { provider: () => 'model' } as any,
       { embed: jest.fn().mockResolvedValue([0.1, 0.2]) } as any,
     );
@@ -63,18 +72,27 @@ describe('MemoryService', () => {
 
   describe('ask', () => {
     /**
-     * The product's central safety property. A secretary that invents a meeting
-     * you never had is worse than useless, so with nothing retrieved the model
-     * must never be asked — otherwise it answers from world knowledge and the
-     * user cannot tell the difference.
+     * The product's central safety property, in its narrowed form. Yamin may now
+     * answer a general question from its own understanding — that is the point of
+     * the conversational lane — but it must never assert a fact about the USER's
+     * life that no note contains.
+     *
+     * The old version of this test asserted the model was never called at all.
+     * That was one IMPLEMENTATION of the guarantee, not the guarantee itself, and
+     * it made "what should I do about burnout?" unanswerable. What must hold now:
+     * with nothing retrieved, no user text reaches the prompt (nothing to
+     * paraphrase into a false memory) and no sources are claimed.
      */
-    it('refuses — without calling the model — when nothing is retrieved', async () => {
+    it('sends no user memories and claims no sources when nothing is retrieved', async () => {
       repo.searchByEmbedding.mockResolvedValue([]);
+      repo.listRecentNotes.mockResolvedValue([]);
 
       const result = await service.ask({ question: 'capital of France?' }, 3, qr);
 
-      expect(generateTextMock).not.toHaveBeenCalled();
-      expect(result.answer).toMatch(/don't have any memories/i);
+      const prompt = generateTextMock.mock.calls[0][0].prompt as string;
+      expect(prompt).toMatch(/know NOTHING about this user's life/i);
+      // The one thing that must not leak in: any of the user's own note text.
+      expect(prompt).not.toContain('Sarah owns the pricing page');
       expect(result.sources).toEqual([]);
     });
 
@@ -87,13 +105,34 @@ describe('MemoryService', () => {
       expect(result.sources[0].fileUuid).toBe('uuid-1');
     });
 
-    it('grounds the prompt in the retrieved notes and forbids outside knowledge', () => {
+    it('grounds facts about the user in the notes while allowing general answers', () => {
       return service.ask({ question: 'who owns pricing?' }, 3, qr).then(() => {
         const prompt = generateTextMock.mock.calls[0][0].prompt as string;
         expect(prompt).toContain('Sarah owns the pricing page');
-        expect(prompt).toMatch(/only the numbered memories/i);
-        expect(prompt).toMatch(/never use outside knowledge/i);
+        // Facts about their life: notes only.
+        expect(prompt).toMatch(/ONLY from the numbered memories/i);
+        // And never laundered into sounding like something they said.
+        expect(prompt).toMatch(/never dress up a general fact/i);
       });
+    });
+
+    /**
+     * The contamination guard, and the one thing here a reviewer cannot verify by
+     * reading the prompt: when nothing scores above the relevance floor, prepareAsk
+     * silently substitutes the 20 most recent notes. Without a marker saying those
+     * are NOT matches, "what should I do about burnout?" comes back as "Given your
+     * Monday deadline with Karim…" — confidently irrelevant, which is worse than
+     * an admission of ignorance.
+     */
+    it('marks recent-notes fallback as background, not as matches', async () => {
+      repo.searchByEmbedding.mockResolvedValue([]);
+      repo.listRecentNotes.mockResolvedValue([hit()]);
+
+      await service.ask({ question: 'how do I handle burnout?' }, 3, qr);
+
+      const prompt = generateTextMock.mock.calls[0][0].prompt as string;
+      expect(prompt).toMatch(/No memory closely MATCHES this question/i);
+      expect(prompt).toMatch(/fine to use none of them/i);
     });
 
     it('scopes retrieval to the asking user', async () => {
