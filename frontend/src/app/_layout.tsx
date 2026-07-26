@@ -13,6 +13,7 @@ import {
 import { Sora_600SemiBold, Sora_700Bold } from '@expo-google-fonts/sora';
 
 import { ToastProvider } from '../components/toast';
+import { RealtimeProvider } from '../lib/realtime';
 import { useTokens } from '../theme/use-tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -54,10 +55,14 @@ export default function RootLayout() {
 
   return (
     <ToastProvider>
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-        <Slot />
-      </View>
+      {/* Inside ToastProvider (it toasts fallbacks), outside the router — the
+          reminder socket must survive navigation between screens. */}
+      <RealtimeProvider>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+        <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+          <Slot />
+        </View>
+      </RealtimeProvider>
     </ToastProvider>
   );
 }

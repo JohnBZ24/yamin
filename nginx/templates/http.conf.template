@@ -1,0 +1,28 @@
+# Rendered by setup.sh — do not edit the copy in conf.d/ by hand.
+# HTTP-only phase: used when serving by bare IP (no domain yet) or while
+# obtaining the first Let's Encrypt certificate.
+
+# conf.d/*.conf is included at http{} level in the stock nginx image, so
+# maps and shared-memory zones are legal here.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Per-IP rate limits. api_zone is generous (normal app usage never hits it);
+# auth_zone is deliberately hostile to password guessing.
+limit_req_zone $binary_remote_addr zone=api_zone:10m  rate=10r/s;
+limit_req_zone $binary_remote_addr zone=auth_zone:10m rate=10r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${SERVER_NAME};
+
+    # Lets certbot prove domain ownership to Let's Encrypt.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    include /etc/nginx/conf.d/app-locations.include;
+}

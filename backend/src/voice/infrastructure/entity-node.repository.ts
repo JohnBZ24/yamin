@@ -39,9 +39,11 @@ export class EntityNodeRepository {
    * BullMQ retry re-runs the *whole* processor, paying for the embedding and
    * both LLM calls a second time. This cannot lose that race.
    *
-   * `description` uses COALESCE so the first real description sticks: later
-   * notes mentioning the same entity in passing (description null) must not
-   * erase what we already know about them.
+   * `description` prefers the NEW value: the extractor is shown the stored
+   * description and instructed to write the entity's updated CURRENT state
+   * (carrying forward what is still true), so the latest write is the most
+   * complete one. A passing mention with no description (null) still keeps
+   * the old text — null never erases knowledge.
    *
    * Deliberately does NOT touch `mentionCount` — this runs once per mention
    * *attempt*, so incrementing here would inflate the count every time a job
@@ -61,7 +63,7 @@ export class EntityNodeRepository {
        ON CONFLICT ("userId", "type", "normalizedName") WHERE "deletedAt" IS NULL
        DO UPDATE SET
          "lastMentionedAt" = now(),
-         "description"     = COALESCE("entity_node"."description", EXCLUDED."description"),
+         "description"     = COALESCE(EXCLUDED."description", "entity_node"."description"),
          "updatedAt"       = now()
        RETURNING *`,
       [data.userId, data.type, data.name, data.normalizedName, data.description],
@@ -113,7 +115,7 @@ export class EntityNodeRepository {
   async findLinkingCandidates(
     { userId, limit }: { userId: number; limit: number },
     queryRunner?: QueryRunner,
-  ): Promise<Array<{ type: string; name: string }>> {
+  ): Promise<Array<{ type: string; name: string; description: string | null }>> {
     const repository = this.getRepository(queryRunner);
     // TimeReference is deliberately excluded. This list is handed to the
     // extractor with "reuse the EXACT name — do not invent a variant", which is
@@ -121,8 +123,13 @@ export class EntityNodeRepository {
     // verified live, a note asking for a reminder at 3:39 reused the existing
     // "3:19" node from an earlier note and recorded the wrong time. Times are
     // per-note by nature and must never be resolved onto each other.
+    //
+    // description rides along (truncated — this goes into every extraction
+    // prompt) for two reasons: it is what lets the extractor tell two people
+    // with the same first name apart, and it is the baseline the extractor
+    // updates when a note changes what we know about an entity.
     return repository.query(
-      `SELECT "type", "name"
+      `SELECT "type", "name", left("description", 200) AS "description"
          FROM "entity_node"
         WHERE "userId" = $1
           AND "deletedAt" IS NULL

@@ -1,8 +1,10 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 
 import { AuthService } from './auth.service';
 import { AuthEmailLoginDto } from './dto/auth-email-login.dto';
+import { AuthRegisterDto } from './dto/auth-register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { User } from '../user/domain/user';
 import { ApiLogin } from './swagger/login.swagger';
@@ -11,9 +13,24 @@ import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 
 @ApiTags('Auth')
+// Credential endpoints get a far tighter budget than the global limit —
+// 10 attempts per minute per IP mirrors the nginx auth_zone so the behavior
+// is the same whether or not a request came through the proxy.
+@Throttle({ default: { ttl: 60_000, limit: 10 } })
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('email/register')
+  @HttpCode(HttpStatus.CREATED)
+  async register(@Body() registerDto: AuthRegisterDto): Promise<{
+    token: string;
+    refreshToken: string;
+    tokenExpires: number;
+    user: User;
+  }> {
+    return this.authService.register(registerDto);
+  }
 
   @Post('email/login')
   @HttpCode(HttpStatus.OK)

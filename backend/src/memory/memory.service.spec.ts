@@ -49,6 +49,12 @@ describe('MemoryService', () => {
 
     service = new MemoryService(
       repo,
+      {
+        createTurn: jest.fn().mockResolvedValue({}),
+        listConversations: jest.fn().mockResolvedValue([]),
+        listTurns: jest.fn().mockResolvedValue([]),
+      } as any,
+      { submitToQueue: jest.fn().mockResolvedValue({}) } as any,
       { getOrThrow: () => ({ extractionModel: 'test/model' }) } as unknown as ConfigService<any>,
       { provider: () => 'model' } as any,
       { embed: jest.fn().mockResolvedValue([0.1, 0.2]) } as any,

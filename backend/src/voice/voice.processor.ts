@@ -18,6 +18,7 @@ import { NodeMentionRepository } from './infrastructure/node-mention.repository'
 import {
   EntityNodeType,
   EntityRelationType,
+  isRelationTypeCompatible,
   isSelfReference,
   normalizeEntityName,
 } from './domain/graph-vocabulary';
@@ -36,9 +37,30 @@ import { describeNow, nextOccurrenceUtc, resolveTimezone } from '../utils/time/t
  * next — two rows, one company, no join.
  */
 const EXTRACTION_SCHEMA = z.object({
+  memorable: z
+    .boolean()
+    .describe(
+      'false when the note carries NO information about the user\'s life worth ' +
+        'recalling later: greetings, tests ("you", "hello?"), meta-questions to ' +
+        'the assistant ("who am I"), or bare acknowledgements. true whenever ' +
+        'there is any real fact, person, plan, or correction in it.',
+    ),
   summary: z
     .string()
-    .describe('A concise one-sentence summary of the voice note.'),
+    .describe(
+      'A concise one-sentence summary of the voice note. When memorable is ' +
+        'false, still describe it neutrally ("A test message with nothing to store.").',
+    ),
+  clarification: z
+    .string()
+    .optional()
+    .describe(
+      'ONE short question for the user — set ONLY when the note cannot be ' +
+        'stored correctly without an answer (e.g. two known people share the ' +
+        'name and context does not settle which one is meant). Name the options. ' +
+        'Omit in the normal case: questions are friction, ask only when guessing ' +
+        'would corrupt the memory.',
+    ),
   nodes: z.array(
     z.object({
       type: z.enum(EntityNodeType).describe('The kind of entity.'),
@@ -50,7 +72,11 @@ const EXTRACTION_SCHEMA = z.object({
       description: z
         .string()
         .optional()
-        .describe('Short description of this entity in context.'),
+        .describe(
+          "The entity's CURRENT state, one short sentence. For a known entity " +
+            'this REPLACES the stored description: keep what is still true, ' +
+            'apply what this note changes.',
+        ),
     }),
   ),
   relations: z.array(
@@ -114,11 +140,28 @@ export class VoiceProcessor extends WorkerHost {
       // 1. Calculate Embeddings
       const embedding = await this.calculateEmbeddings(rawText);
 
+      // Conversation context. Notes arrive as a stream of consciousness —
+      // "my friend Andrew has a disc problem" followed a minute later by "he
+      // has an operation Tuesday". Processed in isolation, that second note is
+      // meaningless: "he" resolves to nobody and the fact attaches to nothing.
+      // The recent notes give both the reminder parser and the extractor the
+      // thread of what the user has been talking about.
+      const recentNotes = await this.voiceRepository.findRecentForContext({
+        userId,
+        excludeFileUuid: fileUuid,
+        limit: 6,
+      });
+      const recentContext = recentNotes
+        .toReversed() // oldest first, so it reads as a conversation
+        .map((note) => `- ${(note.rawText ?? note.summary ?? '').slice(0, 300)}`)
+        .join('\n');
+
       // 2. Trigger Tools / Actions (e.g. Schedule reminders, create tasks)
       const reminderConfirmation = await this.triggerAiSecretaryTools(
         rawText,
         userId,
         timezone,
+        recentContext,
       );
 
       // 3. Extract Structured Graph (Summary, Nodes, Relations).
@@ -132,15 +175,32 @@ export class VoiceProcessor extends WorkerHost {
       const graphData = await this.extractGraphRepresentation(
         rawText,
         knownEntities,
+        recentContext,
       );
+
+      // A note with nothing worth keeping ("you", "hello?", "who am i") used
+      // to be stored like any other memory, with a summary reading "This voice
+      // note is empty because…" — junk that then surfaced in retrieval and
+      // made answers worse. It still gets a row (the user sees their message
+      // was handled) but is excluded from memory: no embedding is written, so
+      // semantic search can never return it. A scheduled reminder overrides
+      // this — the confirmation IS the substance.
+      const memorable = graphData.memorable || !!reminderConfirmation;
 
       // A reminder that scheduled successfully had no visible trace anywhere in
       // the app — the note card just showed the summary as if nothing had
       // happened. Prefixing it here is the cheapest way to make "did that
-      // actually get scheduled" answerable by looking at the note.
-      const summary = reminderConfirmation
-        ? `${reminderConfirmation}. ${graphData.summary}`
-        : graphData.summary;
+      // actually get scheduled" answerable by looking at the note. The
+      // extractor's clarification question rides the same way ("❓ Which
+      // Andrew…?") — the user's answer arrives as a later note and resolves
+      // through the recent-notes context.
+      const summary = [
+        reminderConfirmation,
+        graphData.clarification ? `❓ ${graphData.clarification}` : null,
+        graphData.summary,
+      ]
+        .filter(Boolean)
+        .join('. ');
 
       // 4. Save to Database within a clean PostgreSQL transaction
       await safeTransaction(this.dataSource, async (queryRunner) => {
@@ -192,6 +252,7 @@ export class VoiceProcessor extends WorkerHost {
 
         // Relations now join node ids, not name strings.
         let droppedRelations = 0;
+        let downgradedRelations = 0;
 
         for (const rel of graphData.relations ?? []) {
           const sourceId = nodeIdByKey.get(
@@ -210,12 +271,22 @@ export class VoiceProcessor extends WorkerHost {
             continue;
           }
 
+          // A typed edge on the wrong node kinds ("Box KNOWS Sarah",
+          // "billing integration WORKS_FOR Acme") reads as a confident false
+          // fact. Downgrade to the untyped RELATED_TO rather than drop: the
+          // connection itself is usually real, only its label was junk.
+          let relationType = rel.type;
+          if (!isRelationTypeCompatible(rel.type, rel.sourceType, rel.targetType)) {
+            relationType = EntityRelationType.RELATED_TO;
+            downgradedRelations += 1;
+          }
+
           await this.relationRepository.resolve(
             {
               userId,
               sourceNodeId: sourceId,
               targetNodeId: targetId,
-              type: rel.type,
+              type: relationType,
               description: rel.description || null,
               voiceTranscriptId: transcript.id,
             },
@@ -228,14 +299,21 @@ export class VoiceProcessor extends WorkerHost {
             `Job ${job.id}: dropped ${droppedRelations}/${graphData.relations?.length ?? 0} relation(s) with unresolvable endpoints`,
           );
         }
+        if (downgradedRelations > 0) {
+          this.logger.warn(
+            `Job ${job.id}: downgraded ${downgradedRelations} relation(s) with type-incompatible endpoints to RELATED_TO`,
+          );
+        }
 
-        // Update the Voice Transcript record
+        // Update the Voice Transcript record. Non-memorable notes keep a null
+        // embedding — vector search compares against the embedding column, so
+        // null means "can never come back as a memory".
         await this.voiceRepository.update(
           transcript.id,
           {
             status: 'processed',
             summary,
-            embedding,
+            ...(memorable ? { embedding } : {}),
           },
           queryRunner,
         );
@@ -302,6 +380,7 @@ export class VoiceProcessor extends WorkerHost {
     text: string,
     userId: number,
     timezoneHint?: string,
+    recentContext = '',
   ): Promise<string | null> {
     if (this.isMockProvider) {
       this.logger.warn('MOCK provider: skipping tool execution.');
@@ -318,13 +397,22 @@ export class VoiceProcessor extends WorkerHost {
     // silently and Yamin would never remind them. A dropped reminder is a
     // trust-ending bug for a secretary; let it throw and let BullMQ retry.
     const result = await generateText({
-      model: this.openRouterClient.provider(ai.extractionModel),
+      model: this.openRouterClient.provider(ai.smartModel),
       // Deciding whether a note is a scheduling request, and at what time, must
       // not vary run to run — same reasoning as the extractor below.
       temperature: 0,
       prompt: [
         'You are Yamin, a smart AI Secretary.',
         `The current date and time is: ${describeNow(timezone, now)}.`,
+        ...(recentContext
+          ? [
+              '',
+              'For context, the user\'s recent notes (oldest first) — use these to',
+              'understand what "he", "she", "it", or a bare follow-up refers to:',
+              recentContext,
+            ]
+          : []),
+        '',
         `Analyze the following voice note: "${text}"`,
         '',
         'If the user wants to be reminded of something and you can tell WHEN, call scheduleReminder.',
@@ -332,10 +420,14 @@ export class VoiceProcessor extends WorkerHost {
         'If they clearly want a reminder but the time is missing, ambiguous, or already',
         'past for today, call askAboutTime instead of guessing. Guessing a time is worse',
         'than asking: a reminder that fires at the wrong moment is the same as no reminder.',
-        'Ask a short, specific question naming what you did understand.',
+        'Ask a short, specific question naming what you did understand. But do NOT ask',
+        'about things the recent notes already answer — if the user already said the',
+        'operation is Tuesday and now says "remind me about the operation", that IS',
+        'enough to ask only for the missing piece (the time), nothing else.',
         '',
         'If it is not a scheduling request at all, call nothing — most notes are just',
-        'something to remember.',
+        'something to remember. A statement of fact ("he has an operation Tuesday") is',
+        'NOT a reminder request unless the user asks to be reminded.',
       ].join('\n'),
       // Lets the model produce a closing message after the tool result instead
       // of the run ending on the tool call.
@@ -479,11 +571,17 @@ export class VoiceProcessor extends WorkerHost {
 
   private async extractGraphRepresentation(
     text: string,
-    knownEntities: Array<{ type: string; name: string }> = [],
+    knownEntities: Array<{
+      type: string;
+      name: string;
+      description?: string | null;
+    }> = [],
+    recentContext = '',
   ): Promise<ExtractedGraph> {
     if (this.isMockProvider) {
       this.logger.warn('MOCK provider: returning fabricated graph.');
       return {
+        memorable: true,
         summary: '[MOCK] This is a mock summary of the voice note.',
         nodes: [
           {
@@ -518,11 +616,16 @@ export class VoiceProcessor extends WorkerHost {
     // is (type, normalizedName), each variant becomes a separate node. Memory
     // that fragments on every retelling isn't memory.
     const knownList = knownEntities.length
-      ? knownEntities.map((e) => `- ${e.type}: ${e.name}`).join('\n')
+      ? knownEntities
+          .map(
+            (e) =>
+              `- ${e.type}: ${e.name}${e.description ? ` — ${e.description}` : ''}`,
+          )
+          .join('\n')
       : '(none yet)';
 
     const result = await generateObject({
-      model: this.openRouterClient.provider(ai.extractionModel),
+      model: this.openRouterClient.provider(ai.smartModel),
       schema: EXTRACTION_SCHEMA,
       // Extraction is a deterministic reading task, not a creative one, and the
       // default temperature made it one. Verified live: the SAME note, same
@@ -533,6 +636,25 @@ export class VoiceProcessor extends WorkerHost {
       prompt: [
         'Extract a knowledge graph from this voice note, from the perspective of the person who recorded it.',
         '',
+        ...(recentContext
+          ? [
+              'CONVERSATION CONTEXT — the user\'s recent notes, oldest first. The new note',
+              'continues this thread. Use the context to RESOLVE references, never to',
+              're-extract old facts:',
+              recentContext,
+              '',
+              '- Resolve pronouns and vague references against it: if the previous note named',
+              '  "Andrew Khoury" and this one says "he has a disc problem", the node is',
+              '  Person: Andrew Khoury with the disc fact in its description. A note that is',
+              '  ONLY understandable through context is exactly the case this exists for.',
+              '- If this note CORRECTS an earlier one ("no, they were friends because…"),',
+              '  extract the corrected fact as the user now states it — with the real names',
+              '  from context — and start the summary with "Correction: ".',
+              '- Extract ONLY what the new note adds. Do not re-emit facts that are only in',
+              '  the context notes.',
+              '',
+            ]
+          : []),
         'A node is a THING THE USER COULD LATER ASK ABOUT BY NAME. Apply that test to',
         'every candidate before you emit it. "Who is Fady Bakhos?" is a real question, so',
         'Fady is a node. "Tell me about friend" is not a question anyone asks, so "friend"',
@@ -541,6 +663,13 @@ export class VoiceProcessor extends WorkerHost {
         '',
         'Rules:',
         '- Use ONLY the provided entity types and relationship types. Pick the closest match; use Other/RELATED_TO if nothing fits.',
+        '- Person is ONLY for a named human being. An object, feature, tool, company or',
+        '  piece of work is NEVER a Person: "the box" is Other or Product, "billing',
+        '  integration" is a Task or Topic, "Stripe" is an Organization. If it cannot',
+        '  say hello, it is not a Person.',
+        '- Typed relations must respect what their words mean: WORKS_FOR, KNOWS,',
+        '  RESPONSIBLE_FOR start from a Person (or Organization) — never from an object',
+        '  or task. Between two non-people, prefer PART_OF, DEPENDS_ON or RELATED_TO.',
         '- Do NOT create a node for the speaker themselves ("I", "me", "you"). The whole graph is already theirs.',
         '- Name entities canonically and consistently: "Sarah Okonkwo", not "she" or "Sarah from Acme".',
         '- Give an entity its stable identity, not its current state: "pricing page", never "pricing page completion" or "blocked".',
@@ -558,6 +687,11 @@ export class VoiceProcessor extends WorkerHost {
         '  nodes; that someone likes them belongs in the relation description.',
         '- Prefer FEWER, better nodes. An empty nodes array is correct for a note that',
         '  names nothing durable. Do not pad the graph.',
+        '- Set memorable=false for notes with nothing about the user\'s life in them:',
+        '  greetings, tests ("you", "hello"), questions about the assistant, bare',
+        '  acknowledgements. For those, the summary must be a short neutral line like',
+        '  "A test message — nothing to store." NEVER a sentence about what the note',
+        '  fails to contain; that wording later surfaces in search results as junk.',
         '- Do NOT create a TimeReference for a scheduling time — neither a clock time ("3:39", "8pm")',
         '  nor a duration ("in 2 minutes", "in an hour"). Those belong to the reminder, not the graph,',
         '  and produced junk nodes like "1 minute". Only use TimeReference for a durable, meaningful',
@@ -581,6 +715,28 @@ export class VoiceProcessor extends WorkerHost {
         'entries in it are junk from earlier mistakes. An entry appearing there does not',
         'make it node-worthy — apply the test above to every candidate regardless. If the',
         'note does not genuinely name that entity, do not emit it just because it is listed.',
+        '',
+        'Same name, same person? Decide carefully — the name IS the identity key:',
+        '- A bare first name that matches exactly ONE known person means that person:',
+        '  "andrew said hi" -> reuse "Andrew Khoury". Never coin a new bare-name node.',
+        '- A DIFFERENT person who shares the name (different surname, different role —',
+        '  "my cousin andrew", when Andrew Khoury is a friend) must get a DISTINCT',
+        '  canonical name: the full name if spoken, otherwise the name plus a stable',
+        '  qualifier, e.g. "Andrew (cousin)". Reusing the existing name would silently',
+        '  merge two people into one.',
+        '- If it is genuinely ambiguous which of two known same-named people is meant',
+        '  — the recent context does not settle it either — do NOT guess: leave that',
+        '  person out of the nodes, and set the clarification field to one short',
+        '  question naming the options ("Which Andrew do you mean — Andrew Khoury or',
+        '  your cousin Andrew?"). Still extract everything else in the note that IS',
+        '  unambiguous; the user\'s answer will arrive as a later note and be linked',
+        '  through context then.',
+        '',
+        'Descriptions are LIVING state, not history. The description you emit for a',
+        'known entity replaces the stored one shown in the list: start from it, keep',
+        'what is still true, and apply what this note changes ("recovered from the',
+        'operation", "moved to Paris", "no longer works at Acme"). Dropping an',
+        'established fact is only correct when this note contradicts it.',
         '- Every relation\'s source and target MUST also appear in the nodes array, with the same type and name.',
         '',
         `Voice note: "${text}"`,

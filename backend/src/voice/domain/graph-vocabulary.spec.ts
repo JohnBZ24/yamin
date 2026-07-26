@@ -2,6 +2,8 @@ import {
   ENTITY_NODE_TYPES,
   ENTITY_RELATION_TYPES,
   EntityNodeType,
+  EntityRelationType,
+  isRelationTypeCompatible,
   isSelfReference,
   normalizeEntityName,
 } from './graph-vocabulary';
@@ -79,6 +81,107 @@ describe('isSelfReference', () => {
     expect(isSelfReference(normalizeEntityName('Mei'))).toBe(false);
     expect(isSelfReference(normalizeEntityName('Ian'))).toBe(false);
     expect(isSelfReference(normalizeEntityName('Yousef'))).toBe(false);
+  });
+});
+
+/**
+ * The matrix exists because these exact shapes were observed live: objects
+ * KNOWing people, features WORKS_FOR-ing companies. A wrongly-typed edge is a
+ * confident false fact, which is worse than an untyped one.
+ */
+describe('isRelationTypeCompatible', () => {
+  it('allows the shapes the relations were named for', () => {
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.WORKS_FOR,
+        EntityNodeType.Person,
+        EntityNodeType.Organization,
+      ),
+    ).toBe(true);
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.KNOWS,
+        EntityNodeType.Person,
+        EntityNodeType.Person,
+      ),
+    ).toBe(true);
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.LOCATED_IN,
+        EntityNodeType.Event,
+        EntityNodeType.Location,
+      ),
+    ).toBe(true);
+  });
+
+  it('ASSIGNED_TO runs both directions, but never Person→Person', () => {
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.ASSIGNED_TO,
+        EntityNodeType.Task,
+        EntityNodeType.Person,
+      ),
+    ).toBe(true);
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.ASSIGNED_TO,
+        EntityNodeType.Person,
+        EntityNodeType.Task,
+      ),
+    ).toBe(true);
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.ASSIGNED_TO,
+        EntityNodeType.Person,
+        EntityNodeType.Person,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects the junk shapes observed live — objects acting like people', () => {
+    // "Box KNOWS Sarah"
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.KNOWS,
+        EntityNodeType.Product,
+        EntityNodeType.Person,
+      ),
+    ).toBe(false);
+    // "billing integration WORKS_FOR Acme"
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.WORKS_FOR,
+        EntityNodeType.Task,
+        EntityNodeType.Organization,
+      ),
+    ).toBe(false);
+    // "the oven RESPONSIBLE_FOR dinner"
+    expect(
+      isRelationTypeCompatible(
+        EntityRelationType.RESPONSIBLE_FOR,
+        EntityNodeType.Product,
+        EntityNodeType.Event,
+      ),
+    ).toBe(false);
+  });
+
+  it('RELATED_TO accepts anything — it is the downgrade target', () => {
+    for (const source of ENTITY_NODE_TYPES) {
+      for (const target of ENTITY_NODE_TYPES) {
+        expect(
+          isRelationTypeCompatible(EntityRelationType.RELATED_TO, source, target),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('every relation type has at least one legal shape', () => {
+    for (const type of ENTITY_RELATION_TYPES) {
+      const anyLegal = ENTITY_NODE_TYPES.some((s) =>
+        ENTITY_NODE_TYPES.some((t) => isRelationTypeCompatible(type, s, t)),
+      );
+      expect(anyLegal).toBe(true);
+    }
   });
 });
 

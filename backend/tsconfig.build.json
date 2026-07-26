@@ -1,4 +1,8 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  // dist-worker must be excluded too: once the worker build has emitted
+  // .d.ts files there, any compile that can see them treats them as INPUTS
+  // and dies with TS5055 ("would overwrite input file") — which silently
+  // froze the worker's watch build on stale code.
+  "exclude": ["node_modules", "test", "dist", "dist-worker", "**/*spec.ts"]
 }

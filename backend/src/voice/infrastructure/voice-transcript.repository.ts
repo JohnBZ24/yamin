@@ -97,6 +97,42 @@ export class VoiceTranscriptRepository {
     await repository.softDelete(id);
   }
 
+  /**
+   * The user's last few notes, newest first — CONTEXT for the extraction
+   * worker, which otherwise reads every note in total isolation. "he has an
+   * operation Tuesday" is unresolvable on its own; shown the note recorded a
+   * minute earlier ("my friend Andrew Khoury…"), the extractor can resolve
+   * the pronoun to the right person. Excludes the note being processed.
+   */
+  async findRecentForContext({
+    userId,
+    excludeFileUuid,
+    limit = 6,
+    queryRunner,
+  }: {
+    userId: number;
+    excludeFileUuid: string;
+    limit?: number;
+    queryRunner?: QueryRunner;
+  }): Promise<Array<{ rawText: string | null; summary: string | null; createdAt: Date }>> {
+    const repository = this.getRepository(queryRunner);
+    const entities = await repository.find({
+      where: {
+        userId,
+        status: Not('awaiting_upload'),
+        fileUuid: Not(excludeFileUuid),
+      },
+      order: { createdAt: 'DESC' },
+      take: limit,
+      select: ['rawText', 'summary', 'createdAt'],
+    });
+    return entities.map((entity) => ({
+      rawText: entity.rawText,
+      summary: entity.summary,
+      createdAt: entity.createdAt,
+    }));
+  }
+
   async findManyWithPagination({
     userId,
     paginationOptions,

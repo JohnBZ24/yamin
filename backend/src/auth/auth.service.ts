@@ -4,10 +4,11 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 
 import { UserService } from '../user/user.service';
+import { RoleEnum } from '../utils/enums/roles.enum';
 import { AuthEmailLoginDto } from './dto/auth-email-login.dto';
+import { AuthRegisterDto } from './dto/auth-register.dto';
 import {
-  AuthIncorrectPassword,
-  AuthUserNotFound,
+  AuthInvalidCredentials,
   AuthInvalidRefreshToken,
 } from './exceptions/auth.exceptions';
 import { AllConfigType } from '../config/config.type';
@@ -16,6 +17,11 @@ import { userFindOneAuthLogin } from '../user/infrastructure/relations-and-selec
 
 @Injectable()
 export class AuthService {
+  /** bcrypt("timing-equalizer-not-a-real-password", cost 10) — matches no one;
+   *  exists only so unknown-email logins burn the same time as real ones. */
+  private static readonly DUMMY_PASSWORD_HASH =
+    '$2b$10$.0tcqxu7GdhXRX95pmRSouJ0YVzAlDhaRz5lJeO4TEu7b5l1YgrOu';
+
   sendOtp(email: string): { code: number } | PromiseLike<{ code: number }> {
     throw new Error('Method not implemented.');
   }
@@ -34,6 +40,39 @@ export class AuthService {
     private readonly configService: ConfigService<AllConfigType>,
   ) {}
 
+  /**
+   * Public sign-up. The boilerplate always had UserService.create (email
+   * uniqueness check + hashing included) — it was just never exposed as a
+   * route, so the only way into the app was a seeded account. Registers and
+   * signs the user straight in: there's no email-confirmation flow yet, so
+   * bouncing a brand-new user back to the login form is pure friction.
+   */
+  async register(registerDto: AuthRegisterDto): Promise<{
+    token: string;
+    refreshToken: string;
+    tokenExpires: number;
+    user: User;
+  }> {
+    const user = await this.userService.create({
+      createUserDto: {
+        email: registerDto.email,
+        password: registerDto.password,
+        firstName: registerDto.firstName,
+        lastName: registerDto.lastName,
+        phoneNumber: registerDto.phoneNumber ?? '',
+        role: RoleEnum.user,
+      },
+    });
+
+    const { token, refreshToken, tokenExpires } = await this.getTokensData({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    });
+
+    return { token, refreshToken, tokenExpires, user };
+  }
+
   async validateLogin(loginDto: AuthEmailLoginDto): Promise<{
     token: string;
     refreshToken: string;
@@ -46,27 +85,21 @@ export class AuthService {
       relationsAndSelects: userFindOneAuthLogin,
     });
 
-    // If user not found throw exception
-    if (!user) {
-      throw new AuthUserNotFound({
-        email: loginDto.email,
-      });
-    }
-
-    // If user password is empty throw exception
-    if (!user.password) {
-      throw new AuthIncorrectPassword();
-    }
-
-    // Compare password in body (string) with password (hashed) in database
+    // Always run the bcrypt comparison, even when the email is unknown: an
+    // early return here would answer measurably faster for unregistered
+    // emails (~no bcrypt work vs ~100ms of it), which leaks account existence
+    // through response time alone. The dummy hash is a bcrypt of a throwaway
+    // string, never a real credential — comparing against it always fails but
+    // costs the same as a real comparison.
     const isValidPassword = await bcrypt.compare(
-      loginDto.password, // string
-      user.password, // hashed
+      loginDto.password,
+      user?.password || AuthService.DUMMY_PASSWORD_HASH,
     );
 
-    // Throw error if password is invalid
-    if (!isValidPassword) {
-      throw new AuthIncorrectPassword();
+    // One vague error for every failure mode — see AuthInvalidCredentials for
+    // why distinguishing them would let anyone enumerate registered emails.
+    if (!user || !user.password || !isValidPassword) {
+      throw new AuthInvalidCredentials();
     }
 
     // Generate tokens

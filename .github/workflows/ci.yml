@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  # Lets deploy.yml run these same jobs as its gate instead of duplicating them.
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — lint, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build (API + worker)
+        run: npm run build
+
+      # The deploy builds this same Dockerfile on the EC2 box; catching a
+      # broken image here is much cheaper than catching it during a deploy.
+      - name: Docker image builds
+        run: docker build -t yamin-backend:ci .
+
+  frontend:
+    name: Frontend — typecheck, web export
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # Export first: it also (re)generates the expo-router typed-route
+      # declarations that the typecheck depends on.
+      - name: Web export compiles
+        run: npx expo export --platform web
+
+      - name: Typecheck
+        run: npx tsc --noEmit

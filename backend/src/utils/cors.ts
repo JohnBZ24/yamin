@@ -12,6 +12,26 @@ const DEV_ORIGIN_PATTERNS = [
 ];
 
 /**
+ * Origins for the socket.io handshake. Gateway decorators evaluate at import
+ * time, long before Nest's DI exists, so this reads process.env directly
+ * instead of ConfigService. Same allowlist policy as the HTTP CORS below:
+ * configured origins always; localhost/LAN patterns only outside production.
+ */
+export function resolveGatewayCorsOrigins(): (string | RegExp)[] {
+  const configured = [
+    ...(process.env.CORS_ORIGINS?.split(',') ?? []),
+    process.env.FRONTEND_DOMAIN,
+  ]
+    .map((origin) => origin?.trim())
+    .filter((origin): origin is string => !!origin);
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  return isProduction
+    ? [...new Set(configured)]
+    : [...new Set(configured), ...DEV_ORIGIN_PATTERNS];
+}
+
+/**
  * The previous config was `origin: '*'` together with `credentials: true`.
  * That pair is invalid under the CORS spec — a browser refuses a credentialed
  * response whose Access-Control-Allow-Origin is the `*` wildcard — so it was
@@ -74,6 +94,9 @@ export function resolveCorsOptions(
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: 'Content-Type, Accept, Authorization',
+    // The streaming chat endpoint returns its metadata in these headers; a
+    // cross-origin caller (Expo dev server) can't read them unless exposed.
+    exposedHeaders: 'X-Conversation-Uuid, X-Kind, X-Sources',
     credentials: true,
   };
 }

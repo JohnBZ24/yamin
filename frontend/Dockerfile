@@ -28,5 +28,8 @@ COPY --from=builder /app/dist ./dist
 # strictly and refuses to start on anything extra, so no "$schema" key and no
 # "//" comments in that file (which is why this explanation lives here).
 COPY serve.json ./dist/serve.json
+
+USER node
+
 EXPOSE 8080
 CMD ["serve", "-s", "dist", "-l", "8080"]

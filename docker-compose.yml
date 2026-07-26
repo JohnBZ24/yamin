@@ -1,9 +1,27 @@
+# Every service gets bounded json-file logging; without this, container logs
+# grow until the EC2 root volume fills and the whole box falls over.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+# One image, built once, shared by migrate/api/worker. Declaring the same
+# build block on all three used to produce three separate builds — on a small
+# EC2 instance that tripled the chance of an OOM during `up --build`.
+x-backend-image: &backend-image
+  image: yamin-backend:local
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+
 services:
   # --- PostgreSQL Database Engine (with pgvector support) ---
   postgres:
     image: pgvector/pgvector:pg16
     container_name: yamin_postgres
     restart: always
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
@@ -25,6 +43,7 @@ services:
     image: redis:7-alpine
     container_name: yamin_redis
     restart: always
+    logging: *default-logging
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     ports:
       # Loopback-bound. Redis holds queued voice notes and realtime traffic;
@@ -43,19 +62,17 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
   # --- One-shot schema migration ---
-  # Runs to completion before either app instance starts. Previously nothing ran
-  # migrations at all: the app booted with DATABASE_SYNCHRONIZE=true and let
-  # TypeORM guess the schema, which is what put the pgvector column at risk.
+  # Runs to completion before either app instance starts.
   migrate:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend-image
     container_name: yamin_migrate
     restart: 'no'
+    logging: *default-logging
     command: ['npm', 'run', 'migration:run:prod']
     env_file:
       - .env
     environment:
+      - NODE_ENV=production
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
     depends_on:
@@ -64,15 +81,18 @@ services:
 
   # --- Backend HTTP & WebSockets API Instance (producer) ---
   backend-api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend-image
     container_name: yamin_backend_api
     restart: always
+    logging: *default-logging
     command: ['node', 'dist/main']
     env_file:
       - .env
     environment:
+      # NODE_ENV is pinned here, not trusted from .env — a dev .env copied to
+      # the server must not silently disable production CORS enforcement or
+      # start leaking error details.
+      - NODE_ENV=production
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - REDIS_HOST=redis
@@ -101,19 +121,18 @@ services:
       start_period: 15s
 
   # --- Backend Background Worker Instance (consumer) ---
-  # Separate entrypoint, not a RUN_MODE env branch. The branch used to load the
-  # same AppModule either way, so the API consumed jobs too and the split was
-  # cosmetic. Scale with: docker compose up --scale backend-worker=3
+  # Separate entrypoint, not a RUN_MODE env branch. Scale with:
+  #   docker compose up --scale backend-worker=3
   backend-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend-image
     # No container_name — Docker refuses to scale a service that pins one.
     restart: always
+    logging: *default-logging
     command: ['node', 'dist/main.worker']
     env_file:
       - .env
     environment:
+      - NODE_ENV=production
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - REDIS_HOST=redis
@@ -124,38 +143,51 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # The worker touches /tmp/worker-heartbeat on an interval (see
+      # main.worker.ts). A worker that boots, connects, and then silently hangs
+      # used to look healthy forever — this catches it.
+      test: ['CMD-SHELL', 'test $(( $(date +%s) - $(stat -c %Y /tmp/worker-heartbeat 2>/dev/null || echo 0) )) -lt 60']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
-  # --- Reverse proxy: HTTPS for backend-api ---
-  # The only service with a port exposed to the internet. Serves whatever
-  # config is in ./nginx/conf.d — see that folder's README for the two-phase
-  # bootstrap (HTTP-only first, to obtain a cert; HTTPS after).
+  # --- Reverse proxy: the ONLY service exposed to the internet ---
+  # Serves the frontend at / and the API at /api + /socket.io, all on one
+  # origin (which also makes browser CORS a non-issue). Config in
+  # ./nginx/conf.d is rendered on the server by ./nginx/setup.sh and is
+  # gitignored, so a `git pull` can never revert HTTPS back to HTTP again.
   nginx:
     image: nginx:1.27-alpine
     container_name: yamin_nginx
     restart: always
+    logging: *default-logging
     ports:
       - '80:80'
       - '443:443'
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - certbot_www:/var/www/certbot:ro
-      - certbot_certs:/etc/letsencrypt:ro
+      - ./nginx/certbot/www:/var/www/certbot:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt:ro
     depends_on:
       backend-api:
         condition: service_healthy
+      frontend:
+        condition: service_started
 
   # --- Certbot: obtains and renews the free Let's Encrypt certificate ---
   # Runs `certbot renew` on a loop every 12h; renew is a no-op until the cert
   # is within 30 days of expiring, so this is safe to leave running forever.
-  # The FIRST certificate has to be requested manually once — see
-  # nginx/README.md.
+  # The FIRST certificate is requested by ./nginx/setup.sh — see nginx/README.md.
   certbot:
     image: certbot/certbot
     container_name: yamin_certbot
     restart: always
+    logging: *default-logging
     volumes:
-      - certbot_www:/var/www/certbot
-      - certbot_certs:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+      - ./nginx/certbot/conf:/etc/letsencrypt
     entrypoint: >
       sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done;"
 
@@ -165,19 +197,19 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Baked into the bundle at build time (see frontend/Dockerfile). Unset
-        # means the app's own default, http://localhost:3000 — correct for a
-        # browser on this machine, wrong from a phone. To test on a device, set
-        # EXPO_PUBLIC_API_URL to this host's LAN address in .env and rebuild:
-        #   EXPO_PUBLIC_API_URL=http://192.168.10.61:3000
+        # Baked into the bundle at build time (see frontend/Dockerfile). Leave
+        # unset in production: the web app then talks to its own origin, which
+        # nginx routes to the API. Only set this when the API lives on a
+        # different origin than the page.
         EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-}
     container_name: yamin_frontend
     restart: always
+    logging: *default-logging
     ports:
-      - '8080:8080'
+      # Loopback-bound: the public path to the frontend is through nginx.
+      # This was the one service accidentally published on 0.0.0.0 with no TLS.
+      - '127.0.0.1:8080:8080'
 
 volumes:
   pgdata:
   redisdata:
-  certbot_www:
-  certbot_certs:

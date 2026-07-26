@@ -1,0 +1,75 @@
+name: Deploy
+
+# Every push to main deploys automatically once CI is green; the
+# workflow_dispatch trigger is the "deploy now" button for reruns.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Never let two deploys interleave on the box; a queued one waits.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: ci
+    environment: production
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Deploy over SSH
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+          # Optional: leave DOMAIN unset to serve plain HTTP on the instance IP.
+          DOMAIN: ${{ secrets.DOMAIN }}
+          CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
+          APP_DIR: ${{ secrets.APP_DIR }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
+            DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" APP_DIR="${APP_DIR:-\$HOME/yamin}" 'bash -s' <<'DEPLOY'
+          set -euo pipefail
+          cd "$APP_DIR"
+
+          echo "==> Updating source"
+          git fetch origin main
+          git reset --hard origin/main
+
+          echo "==> Rendering nginx config (idempotent; keeps HTTPS if enabled)"
+          chmod +x nginx/setup.sh
+          ./nginx/setup.sh "$DOMAIN"
+
+          echo "==> Building and starting services"
+          docker compose pull postgres redis nginx certbot
+          docker compose up -d --build --remove-orphans
+
+          echo "==> Waiting for API readiness"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/api/v1/health/ready >/dev/null 2>&1; then
+              echo "API is ready."
+              break
+            fi
+            [ "$i" = 30 ] && { echo "API never became ready"; docker compose ps; docker compose logs --tail 100 backend-api; exit 1; }
+            sleep 5
+          done
+
+          echo "==> Pruning old images"
+          docker image prune -f
+
+          docker compose ps
+          DEPLOY
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

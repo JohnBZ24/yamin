@@ -12,24 +12,20 @@ class AuthException extends BaseCustomException {
   }
 }
 
-export class AuthIncorrectPassword extends AuthException {
-  constructor(details?: Record<string, unknown>) {
+/**
+ * One deliberately vague error for EVERY login failure — unknown email, empty
+ * password column, wrong password. The previous pair (AUTH_USER_NOT_FOUND 404
+ * vs AUTH_INCORRECT_PASSWORD 422) told an attacker which emails have accounts:
+ * probe the login form with a list of addresses and the status code alone
+ * separates registered from not. Same reason this never carries `details` —
+ * the old 404 echoed the submitted email back.
+ */
+export class AuthInvalidCredentials extends AuthException {
+  constructor() {
     super(
-      'AUTH_INCORRECT_PASSWORD',
-      'The password provided is incorrect.',
-      HttpStatus.UNPROCESSABLE_ENTITY,
-      details,
-    );
-  }
-}
-
-export class AuthUserNotFound extends AuthException {
-  constructor(details?: Record<string, unknown>) {
-    super(
-      'AUTH_USER_NOT_FOUND',
-      'User not found with the provided email.',
-      HttpStatus.NOT_FOUND,
-      details,
+      'AUTH_INVALID_CREDENTIALS',
+      'Invalid email or password.',
+      HttpStatus.UNAUTHORIZED,
     );
   }
 }

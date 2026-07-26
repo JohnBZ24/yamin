@@ -3,10 +3,8 @@ import {
   amberDark,
   grass,
   grassDark,
-  iris,
-  irisDark,
-  mauve,
-  mauveDark,
+  gray,
+  grayDark,
   tomato,
   tomatoDark,
 } from '@radix-ui/colors';
@@ -23,50 +21,55 @@ import {
  * ~25 inline hexes and a `theme.ts` nothing imported, which is why dark mode
  * silently did nothing.
  *
- * Palette: iris (brand — keeps the violet identity), mauve (neutral, tuned to
- * sit under iris), plus grass/amber/tomato for status only.
+ * Palette: monochrome. Pure gray for every surface and border, and the brand
+ * fill is simply ink — near-black on light, near-white on dark — so the one
+ * accent in the app is contrast itself. Color appears only as status
+ * (grass/amber/tomato), where meaning genuinely needs hue.
  */
 
 export type ColorScheme = 'light' | 'dark';
 
 const build = (scheme: ColorScheme) => {
   const isDark = scheme === 'dark';
-  const n = isDark ? mauveDark : mauve;
-  const b = isDark ? irisDark : iris;
+  const n = isDark ? grayDark : gray;
   const ok = isDark ? grassDark : grass;
   const warn = isDark ? amberDark : amber;
   const bad = isDark ? tomatoDark : tomato;
 
   return {
     /** App background — the furthest-back surface. */
-    canvas: n.mauve1,
+    canvas: n.gray1,
     /** Cards, bubbles, panels sitting on the canvas. */
-    surface: n.mauve2,
+    surface: n.gray2,
     /** Inputs and pressable fills. */
-    surfaceSunken: n.mauve3,
-    surfaceHover: n.mauve4,
-    surfaceActive: n.mauve5,
+    surfaceSunken: n.gray3,
+    surfaceHover: n.gray4,
+    surfaceActive: n.gray5,
 
-    borderSubtle: n.mauve6,
-    border: n.mauve7,
-    borderStrong: n.mauve8,
+    borderSubtle: n.gray6,
+    border: n.gray7,
+    borderStrong: n.gray8,
 
     /** Body text. Step 12 is the high-contrast pairing for these backgrounds. */
-    text: n.mauve12,
+    text: n.gray12,
     /** Secondary text — still accessible, deliberately quieter. */
-    textMuted: n.mauve11,
+    textMuted: n.gray11,
     /** Labels and metadata. */
-    textSubtle: n.mauve10,
+    textSubtle: n.gray10,
 
-    brandSurface: b.iris3,
-    brandBorder: b.iris6,
-    /** The solid brand fill. Step 9 is the most saturated step. */
-    brand: b.iris9,
-    brandHover: b.iris10,
-    /** Brand-coloured text on a neutral background. */
-    brandText: b.iris11,
-    /** Text on top of `brand`. White is the accessible pairing for step 9. */
-    onBrand: '#ffffff',
+    brandSurface: n.gray3,
+    brandBorder: n.gray7,
+    /**
+     * The solid brand fill: ink. Step 12 is the highest-contrast step of the
+     * scale, which is the entire monochrome identity — buttons are black on
+     * light and white on dark.
+     */
+    brand: n.gray12,
+    brandHover: isDark ? '#ffffff' : '#000000',
+    /** Brand-coloured text on a neutral background — in mono, just ink. */
+    brandText: n.gray12,
+    /** Text on top of `brand` — the opposite pole of the scale. */
+    onBrand: isDark ? '#0b0b0b' : '#ffffff',
 
     successSurface: ok.grass3,
     successText: ok.grass11,
@@ -77,9 +80,13 @@ const build = (scheme: ColorScheme) => {
     danger: bad.tomato9,
 
     overlay: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.35)',
-    /** Fills on top of the brand colour (e.g. controls inside a brand bubble). */
-    onBrandSubtle: 'rgba(255,255,255,0.18)',
-    onBrandMuted: 'rgba(255,255,255,0.65)',
+    /**
+     * Fills on top of the brand colour (e.g. controls inside a brand bubble).
+     * Brand is black in light mode and white in dark mode, so these overlays
+     * flip with it.
+     */
+    onBrandSubtle: isDark ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.18)',
+    onBrandMuted: isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)',
   };
 };
 

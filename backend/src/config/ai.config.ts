@@ -31,6 +31,10 @@ class EnvironmentVariablesValidator {
   @IsString()
   @IsOptional()
   AI_EXTRACTION_MODEL: string;
+
+  @IsString()
+  @IsOptional()
+  AI_SMART_MODEL: string;
 }
 
 export default registerAs<AiConfig>('ai', () => {
@@ -73,6 +77,12 @@ export default registerAs<AiConfig>('ai', () => {
     // French mid-sentence — it just chooses which language gets mangled.
     sttLanguage: (process.env.AI_STT_LANGUAGE ?? '').trim(),
     extractionModel: process.env.AI_EXTRACTION_MODEL || 'google/gemini-2.5-flash',
+    // Falls back to the extraction model so an unset var degrades gracefully
+    // rather than crashing the boot.
+    smartModel:
+      process.env.AI_SMART_MODEL ||
+      process.env.AI_EXTRACTION_MODEL ||
+      'google/gemini-2.5-pro',
     baseUrl: 'https://openrouter.ai/api/v1',
   };
 });

@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { CoreModule } from './core.module';
 import { UserModule } from './user/user.module';
@@ -20,12 +22,28 @@ import { RealtimeApiModule } from './realtime/realtime-api.module';
 @Module({
   imports: [
     CoreModule,
+    // Second line of rate limiting behind nginx's limit_req zones: nginx
+    // caps per-IP request rates at the edge; this caps them again in-process
+    // so a request path that bypasses the proxy (loopback, port-forward) is
+    // still bounded. Auth endpoints carry a tighter @Throttle override.
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 300,
+      },
+    ]),
     UserModule,
     AuthModule,
     HealthModule,
     VoiceApiModule,
     MemoryModule,
     RealtimeApiModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class ApiModule {}

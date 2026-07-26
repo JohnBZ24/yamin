@@ -1,9 +1,10 @@
 import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
-import { api, Entity } from '../lib/api';
+import { api, ConversationSummary, Entity } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
 
@@ -31,13 +32,17 @@ export function MemorySidebar({
   token,
   refreshKey,
   onClose,
+  onSignOut,
 }: {
   token: string;
   refreshKey: number;
   onClose?: () => void;
+  onSignOut?: () => void;
 }) {
   const { colors } = useTokens();
+  const router = useRouter();
   const [entities, setEntities] = useState<Entity[]>([]);
+  const [recentChats, setRecentChats] = useState<ConversationSummary[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof api.entity>> | null>(
     null,
@@ -48,6 +53,10 @@ export function MemorySidebar({
     api
       .entities(token)
       .then((list) => !cancelled && setEntities(list))
+      .catch(() => {});
+    api
+      .chats(token, 4)
+      .then((list) => !cancelled && setRecentChats(list))
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -143,15 +152,59 @@ export function MemorySidebar({
     [selected, detail, colors],
   );
 
+  const navigate = (path: '/chat' | '/graph') => {
+    onClose?.();
+    router.push(path);
+  };
+
   return (
     <View style={styles.wrap}>
       <View style={[styles.head, { borderBottomColor: colors.borderSubtle }]}>
         <Text style={[type.heading, { color: colors.text }]}>Memory</Text>
         {onClose && (
-          <Pressable onPress={onClose} hitSlop={10}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close sidebar"
+          >
             <Feather name="x" size={18} color={colors.textMuted} />
           </Pressable>
         )}
+      </View>
+
+      {/* The two other faces of the memory: interrogate it, or see its shape. */}
+      <View style={[styles.nav, { borderBottomColor: colors.borderSubtle }]}>
+        <Pressable
+          onPress={() => navigate('/chat')}
+          accessibilityRole="button"
+          accessibilityLabel="Start a new chat with Yamin"
+          style={({ pressed }) => [
+            styles.navBtn,
+            {
+              backgroundColor: pressed ? colors.surfaceHover : colors.brand,
+            },
+          ]}
+        >
+          <Feather name="message-circle" size={15} color={colors.onBrand} />
+          <Text style={[type.smallMedium, { color: colors.onBrand }]}>New chat</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => navigate('/graph')}
+          accessibilityRole="button"
+          accessibilityLabel="Open the knowledge graph"
+          style={({ pressed }) => [
+            styles.navBtn,
+            {
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: pressed ? colors.surfaceHover : 'transparent',
+            },
+          ]}
+        >
+          <Feather name="share-2" size={15} color={colors.text} />
+          <Text style={[type.smallMedium, { color: colors.text }]}>Graph</Text>
+        </Pressable>
       </View>
 
       <FlatList
@@ -160,9 +213,66 @@ export function MemorySidebar({
         renderItem={renderEntity}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
-          <Text style={[type.label, { color: colors.textSubtle }]}>
-            {entities.length} thing{entities.length === 1 ? '' : 's'} Yamin knows
-          </Text>
+          <View style={styles.listHeader}>
+            {recentChats.length > 0 && (
+              <View style={styles.chatsSection}>
+                <View style={styles.chatsHead}>
+                  <Text style={[type.label, { color: colors.textSubtle }]}>
+                    Recent chats
+                  </Text>
+                  <Pressable
+                    onPress={() => {
+                      onClose?.();
+                      router.push('/chats');
+                    }}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="See all chats"
+                  >
+                    <Text style={[type.smallMedium, { color: colors.textMuted }]}>
+                      All
+                    </Text>
+                  </Pressable>
+                </View>
+                {recentChats.map((chat) => (
+                  <Pressable
+                    key={chat.conversationUuid}
+                    onPress={() => {
+                      onClose?.();
+                      router.push({
+                        pathname: '/chat',
+                        params: { c: chat.conversationUuid },
+                      });
+                    }}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.chatRow,
+                      {
+                        backgroundColor: pressed
+                          ? colors.surfaceHover
+                          : 'transparent',
+                      },
+                    ]}
+                  >
+                    <Feather
+                      name="message-circle"
+                      size={13}
+                      color={colors.textSubtle}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={[type.small, { color: colors.textMuted, flex: 1 }]}
+                    >
+                      {chat.title}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+            <Text style={[type.label, { color: colors.textSubtle }]}>
+              {entities.length} thing{entities.length === 1 ? '' : 's'} Yamin knows
+            </Text>
+          </View>
         }
         ListEmptyComponent={
           <Text style={[type.small, { color: colors.textSubtle }]}>
@@ -170,6 +280,24 @@ export function MemorySidebar({
           </Text>
         }
       />
+
+      {onSignOut && (
+        <Pressable
+          onPress={onSignOut}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
+          style={({ pressed }) => [
+            styles.signOut,
+            {
+              borderTopColor: colors.borderSubtle,
+              backgroundColor: pressed ? colors.surfaceHover : 'transparent',
+            },
+          ]}
+        >
+          <Feather name="log-out" size={14} color={colors.textMuted} />
+          <Text style={[type.smallMedium, { color: colors.textMuted }]}>Sign out</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -184,7 +312,47 @@ const styles = StyleSheet.create({
     paddingVertical: space.lg,
     borderBottomWidth: 1,
   },
+  nav: {
+    flexDirection: 'row',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+    borderBottomWidth: 1,
+  },
+  navBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+  },
+  signOut: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
+    borderTopWidth: 1,
+  },
   list: { padding: space.md, gap: space.xs },
+  listHeader: { gap: space.md },
+  chatsSection: { gap: 2 },
+  chatsHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space.xs,
+  },
+  chatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

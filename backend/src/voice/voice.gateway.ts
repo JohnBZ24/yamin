@@ -10,11 +10,15 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
 import { AllConfigType } from '../config/config.type';
+import { resolveGatewayCorsOrigins } from '../utils/cors';
 import { RealtimeNotifier, userRoom } from '../realtime/realtime.constants';
 
+// `origin: '*'` here used to bypass the allowlist that the HTTP side
+// carefully enforces. The JWT check in handleConnection is still the real
+// gate; this just stops the handshake from advertising itself to any origin.
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: resolveGatewayCorsOrigins(),
   },
 })
 @Injectable()

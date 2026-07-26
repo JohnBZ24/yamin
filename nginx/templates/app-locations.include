@@ -1,0 +1,70 @@
+# Shared routing for both the HTTP and HTTPS server blocks — rendered into
+# conf.d/ by setup.sh and pulled in with `include`. One origin serves
+# everything: the web app at /, the API at /api, realtime at /socket.io.
+# Same-origin means browser CORS never enters the picture for the web build.
+
+# The app records voice notes; the backend accepts up to 50 MB
+# (see backend/src/main.ts). nginx's default is 1 MB, which used to 413
+# every real recording before it reached the API.
+client_max_body_size 50m;
+
+# Login/refresh get a much tighter budget than the rest of the API —
+# this is what keeps credential stuffing boring.
+location /api/v1/auth/ {
+    limit_req zone=auth_zone burst=5 nodelay;
+    limit_req_status 429;
+    proxy_pass http://backend-api:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /api/ {
+    limit_req zone=api_zone burst=30 nodelay;
+    limit_req_status 429;
+    proxy_pass http://backend-api:3000;
+    proxy_http_version 1.1;
+    # /memory/ask fans out to an LLM; 60s (nginx default) is not enough
+    # headroom on a slow generation.
+    proxy_read_timeout 120s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# socket.io is the only path that actually upgrades to a WebSocket, so the
+# Upgrade/Connection headers live here — sending `Connection "upgrade"`
+# unconditionally on every REST request (the old config) breaks upstream
+# keepalive for no benefit.
+location /socket.io/ {
+    proxy_pass http://backend-api:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Swagger — the backend only mounts this outside production, so in prod this
+# proxies to a 404. Kept so staging boxes get docs without a config change.
+location /docs {
+    proxy_pass http://backend-api:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Everything else is the web app.
+location / {
+    proxy_pass http://frontend:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}

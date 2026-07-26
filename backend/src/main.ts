@@ -76,14 +76,19 @@ async function bootstrap() {
   );
   app.useWebSocketAdapter(redisIoAdapter);
 
-  const options = createSwaggerDocumentBuilder();
-  const document = SwaggerModule.createDocument(app, options);
-  const swaggerDarkCss = getSwaggerDarkCss();
+  // The full API surface has no business being enumerable on a production
+  // box; /docs exists for local dev and staging only.
+  const nodeEnv = configService.get('app.nodeEnv', { infer: true });
+  if (nodeEnv !== 'production') {
+    const options = createSwaggerDocumentBuilder();
+    const document = SwaggerModule.createDocument(app, options);
+    const swaggerDarkCss = getSwaggerDarkCss();
 
-  SwaggerModule.setup('docs', app, document, {
-    swaggerOptions,
-    customCss: swaggerDarkCss,
-  });
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions,
+      customCss: swaggerDarkCss,
+    });
+  }
 
   const port = configService.getOrThrow('app.port', { infer: true });
   await app.listen(port);

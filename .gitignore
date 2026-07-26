@@ -1,2 +1,9 @@
 .env
 node_modules
+
+# Rendered on the server by nginx/setup.sh from nginx/templates — never
+# tracked, so a git pull can't revert the live (HTTPS) config.
+nginx/conf.d/
+# Let's Encrypt state + ACME webroot (bind-mounted into nginx/certbot
+# containers on the server).
+nginx/certbot/

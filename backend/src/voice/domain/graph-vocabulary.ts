@@ -42,6 +42,105 @@ export enum EntityRelationType {
 export const ENTITY_NODE_TYPES = Object.values(EntityNodeType);
 export const ENTITY_RELATION_TYPES = Object.values(EntityRelationType);
 
+const setOf = (...types: EntityNodeType[]) => new Set(types);
+const allExcept = (...types: EntityNodeType[]) =>
+  new Set(ENTITY_NODE_TYPES.filter((t) => !types.includes(t)));
+
+type EndpointRule = {
+  source: ReadonlySet<EntityNodeType>;
+  target: ReadonlySet<EntityNodeType>;
+};
+
+const {
+  Person,
+  Organization,
+  Project,
+  Task,
+  Event,
+  Location,
+  Topic,
+  Product,
+  TimeReference,
+  Other,
+} = EntityNodeType;
+
+/**
+ * Which node types each relation type may connect. Verified live: the
+ * extractor emitted things like `Product:Box -KNOWS-> Person:Sarah` and
+ * `WORKS_FOR` edges hanging off a feature — a typed edge on the wrong node
+ * kinds is worse than no edge, because it reads as a confident false fact
+ * ("box knows Sarah").
+ *
+ * The schema enum constrains WHAT types exist; this matrix constrains WHICH
+ * may meet. It's enforced deterministically in the processor (incompatible
+ * edges are downgraded to RELATED_TO, never dropped) because prompt rules
+ * alone demonstrably don't hold at the tail.
+ *
+ * Each entry is a list of allowed (source-set, target-set) pairs — a list,
+ * because e.g. ASSIGNED_TO legitimately runs both Person→Task and
+ * Task→Person and a single pair can't say that without also allowing
+ * Person→Person.
+ */
+export const RELATION_TYPE_CONSTRAINTS: Record<EntityRelationType, EndpointRule[]> = {
+  [EntityRelationType.WORKS_FOR]: [
+    { source: setOf(Person), target: setOf(Organization, Person, Project) },
+  ],
+  [EntityRelationType.MEMBER_OF]: [
+    { source: setOf(Person), target: setOf(Organization, Project, Event, Topic) },
+    { source: setOf(Organization), target: setOf(Organization) },
+  ],
+  [EntityRelationType.PARTICIPANT_IN]: [
+    { source: setOf(Person, Organization), target: setOf(Event, Project, Task, Topic) },
+  ],
+  [EntityRelationType.ASSIGNED_TO]: [
+    { source: setOf(Task, Project, Other), target: setOf(Person, Organization) },
+    { source: setOf(Person, Organization), target: setOf(Task, Project, Other) },
+  ],
+  [EntityRelationType.RESPONSIBLE_FOR]: [
+    {
+      source: setOf(Person, Organization),
+      target: setOf(Task, Project, Product, Event, Topic, Organization, Other),
+    },
+  ],
+  [EntityRelationType.PART_OF]: [
+    {
+      source: allExcept(TimeReference),
+      target: setOf(Organization, Project, Product, Topic, Event, Location, Other),
+    },
+  ],
+  [EntityRelationType.LOCATED_IN]: [
+    { source: allExcept(TimeReference), target: setOf(Location, Organization, Event, Other) },
+  ],
+  [EntityRelationType.SCHEDULED_FOR]: [
+    { source: setOf(Event, Task, Project, Other), target: setOf(TimeReference, Event) },
+  ],
+  [EntityRelationType.KNOWS]: [{ source: setOf(Person), target: setOf(Person) }],
+  [EntityRelationType.OWNS]: [
+    {
+      source: setOf(Person, Organization),
+      target: setOf(Product, Project, Organization, Location, Task, Topic, Other),
+    },
+  ],
+  [EntityRelationType.DEPENDS_ON]: [
+    { source: allExcept(TimeReference), target: allExcept(TimeReference) },
+  ],
+  // The untyped fallback — anything may relate to anything.
+  [EntityRelationType.RELATED_TO]: [
+    { source: allExcept(), target: allExcept() },
+  ],
+};
+
+/** Can this relation type legally connect these two node types? */
+export function isRelationTypeCompatible(
+  type: EntityRelationType,
+  sourceType: EntityNodeType,
+  targetType: EntityNodeType,
+): boolean {
+  return RELATION_TYPE_CONSTRAINTS[type].some(
+    (rule) => rule.source.has(sourceType) && rule.target.has(targetType),
+  );
+}
+
 /**
  * The key entity resolution joins on.
  *

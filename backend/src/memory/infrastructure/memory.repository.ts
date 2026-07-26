@@ -27,6 +27,15 @@ export type EntitySummary = {
   lastMentionedAt: Date | null;
 };
 
+export type GraphEdge = {
+  id: number;
+  sourceNodeId: number;
+  targetNodeId: number;
+  type: EntityRelationType;
+  description: string | null;
+  mentionCount: number;
+};
+
 export type EntityFact = {
   relationId: number;
   type: EntityRelationType;
@@ -208,6 +217,32 @@ export class MemoryRepository {
         ORDER BY "mentionCount" DESC, "lastMentionedAt" DESC NULLS LAST
         LIMIT $2`,
       [userId, limit],
+    );
+  }
+
+  /**
+   * Edges among a given set of nodes, for the graph view. Restricted to edges
+   * whose BOTH endpoints are in the set — an edge to a node the client didn't
+   * receive would render as a line into nothing.
+   */
+  async listEdgesAmong(
+    { userId, nodeIds }: { userId: number; nodeIds: number[] },
+    queryRunner?: QueryRunner,
+  ): Promise<GraphEdge[]> {
+    if (nodeIds.length === 0) {
+      return [];
+    }
+
+    return this.repo(queryRunner).query(
+      `SELECT r."id", r."sourceNodeId", r."targetNodeId", r."type",
+              r."description", r."mentionCount"
+         FROM "entity_relation" r
+        WHERE r."userId" = $1
+          AND r."deletedAt" IS NULL
+          AND r."sourceNodeId" = ANY($2::int[])
+          AND r."targetNodeId" = ANY($2::int[])
+        ORDER BY r."mentionCount" DESC`,
+      [userId, nodeIds],
     );
   }
 

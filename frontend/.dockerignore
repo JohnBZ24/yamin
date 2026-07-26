@@ -1,0 +1,11 @@
+node_modules
+dist
+.expo
+.env
+.env.*
+android
+ios
+*.md
+.git
+Dockerfile
+.dockerignore

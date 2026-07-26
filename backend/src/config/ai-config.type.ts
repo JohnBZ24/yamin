@@ -23,5 +23,13 @@ export type AiConfig = {
    */
   sttLanguage: string;
   extractionModel: string;
+  /**
+   * The model for the comprehension-heavy calls: graph extraction, reminder
+   * parsing, and answering questions from memories. Kept separate from
+   * extractionModel (which still serves quick intent routing and small talk)
+   * so those latency-sensitive calls can stay on a fast model while the calls
+   * that need to actually understand context run on a stronger one.
+   */
+  smartModel: string;
   baseUrl: string;
 };
