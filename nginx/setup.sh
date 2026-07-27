@@ -6,17 +6,43 @@
 # thing that writes it).
 #
 # Usage:
-#   ./setup.sh                 HTTP-only, answers on any hostname/IP
+#   ./setup.sh                 Reuses the domain this box was last set up with
+#                              (remembered in conf.d/.domain). HTTP-only if it
+#                              has never been given one.
 #   ./setup.sh yamin.example.com
 #                              HTTPS if a cert already exists; otherwise
 #                              renders HTTP, obtains the cert via certbot,
 #                              then switches to HTTPS. Set CERTBOT_EMAIL the
 #                              first time.
+#   ./setup.sh --no-tls        Deliberately go back to HTTP-only and forget the
+#                              domain. The only way to lose HTTPS.
 set -eu
 cd "$(dirname "$0")"
 
 DOMAIN="${1:-}"
 mkdir -p conf.d certbot/www certbot/conf
+
+# The box remembers its own domain.
+#
+# deploy.yml passes DOMAIN from a GitHub secret. If that secret is unset the
+# argument arrives EMPTY, and this script used to cheerfully re-render the
+# HTTP-only config — silently tearing down working HTTPS on the next push, with
+# a green pipeline and no error anywhere. That is the opposite of the guarantee
+# in the header comment.
+#
+# So: remember the domain in the gitignored conf.d/, and treat "no domain
+# argument" as "whatever this box was last set up with". Downgrading to plain
+# HTTP now has to be explicit — `./setup.sh --no-tls` — rather than something
+# that happens by accident because a secret was never created.
+DOMAIN_FILE="conf.d/.domain"
+if [ "$DOMAIN" = "--no-tls" ]; then
+    DOMAIN=""
+    rm -f "$DOMAIN_FILE"
+elif [ -z "$DOMAIN" ] && [ -f "$DOMAIN_FILE" ]; then
+    DOMAIN="$(cat "$DOMAIN_FILE")"
+    echo "No domain argument given; reusing the domain this box was set up with: $DOMAIN"
+fi
+[ -n "$DOMAIN" ] && printf '%s' "$DOMAIN" > "$DOMAIN_FILE"
 
 render() {
     # $1 = template file, $2 = server_name value
