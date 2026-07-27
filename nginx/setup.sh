@@ -56,11 +56,19 @@ fi
 : "${CERTBOT_EMAIL:?First run for $DOMAIN needs CERTBOT_EMAIL=you@example.com}"
 render http.conf.template "$DOMAIN"
 docker compose -f ../docker-compose.yml up -d nginx </dev/null
-# --rm certbot would likewise inherit and consume the caller's STDIN.
-docker compose -f ../docker-compose.yml run --rm -T certbot certonly \
-    --webroot -w /var/www/certbot \
+
+# --entrypoint certbot is REQUIRED, not tidiness. The compose service overrides
+# the image entrypoint with `sh -c "while :; do certbot renew; sleep 12h; done"`
+# for unattended renewal. `compose run <svc> certonly ...` appends those words as
+# ARGUMENTS to that sh -c script, where they are silently ignored — so the
+# container ran the infinite renew loop instead of issuing anything, and the
+# deploy hung forever on a command that was never going to return.
+# -T and </dev/null keep it from eating the caller's STDIN (see reload_nginx).
+docker compose -f ../docker-compose.yml run --rm -T --entrypoint certbot certbot \
+    certonly --webroot -w /var/www/certbot \
     -d "$DOMAIN" \
-    --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email </dev/null
+    --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email \
+    --non-interactive </dev/null
 render https.conf.template "$DOMAIN"
 reload_nginx
 echo "HTTPS enabled for $DOMAIN."
