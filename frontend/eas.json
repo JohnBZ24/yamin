@@ -36,8 +36,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "_comment": "Baked into the bundle at build time — changing the server means rebuilding the APK. This is an Elastic IP, so it survives instance stop/start; a plain public IP does not, and every installed APK would break silently the first time the box restarted. Must be the nginx origin (port 80/443), never :3000: the API is loopback-bound. Plain HTTP works only because app.json keeps usesCleartextTraffic:true; switch both to https:// the moment a domain and cert exist.",
-        "EXPO_PUBLIC_API_URL": "http://54.243.125.69"
+        "_comment": "Baked into the bundle at build time — changing the server means rebuilding the APK. HTTPS via Let's Encrypt on an Elastic IP, so neither an instance stop/start nor a cert renewal changes it. Must be the nginx origin (443), never :3000: the API is loopback-bound. app.json no longer sets usesCleartextTraffic, so this MUST stay https:// — a plain-http URL here would be blocked by Android at runtime.",
+        "EXPO_PUBLIC_API_URL": "https://yamin.click"
       }
     }
   },

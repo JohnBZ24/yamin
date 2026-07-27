@@ -44,7 +44,21 @@ if [ -z "$DOMAIN" ]; then
     exit 0
 fi
 
-if [ -d "certbot/conf/live/$DOMAIN" ]; then
+# Ask the certbot container, not the host filesystem.
+#
+# `[ -d certbot/conf/live/$DOMAIN ]` looks correct and is not: certbot creates
+# those directories root-owned and mode 0700, so this script — running as the
+# deploy user — cannot stat them and the test is ALWAYS false. The result was
+# silent and expensive: every single deploy believed no certificate existed and
+# requested another one, stacking up yamin.click-0001, -0002, ... until Let's
+# Encrypt's duplicate-certificate rate limit (5 per week) locked the domain out.
+# The container runs as root and sees the real state.
+cert_exists() {
+    docker compose -f ../docker-compose.yml run --rm -T --entrypoint sh certbot \
+        -c "[ -d /etc/letsencrypt/live/$1 ]" </dev/null >/dev/null 2>&1
+}
+
+if cert_exists "$DOMAIN"; then
     render https.conf.template "$DOMAIN"
     echo "Certificate for $DOMAIN present — rendered HTTPS config."
     reload_nginx
