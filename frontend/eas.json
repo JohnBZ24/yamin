@@ -36,8 +36,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "_comment": "Baked into the bundle at build time — changing the server means rebuilding the APK. Must be the nginx origin (port 80/443), never :3000: the API is loopback-bound on the box. Plain HTTP works only because app.json keeps usesCleartextTraffic:true; switch both to https:// the moment a domain and cert exist.",
-        "EXPO_PUBLIC_API_URL": "http://54.174.188.96"
+        "_comment": "Baked into the bundle at build time — changing the server means rebuilding the APK. This is an Elastic IP, so it survives instance stop/start; a plain public IP does not, and every installed APK would break silently the first time the box restarted. Must be the nginx origin (port 80/443), never :3000: the API is loopback-bound. Plain HTTP works only because app.json keeps usesCleartextTraffic:true; switch both to https:// the moment a domain and cert exist.",
+        "EXPO_PUBLIC_API_URL": "http://54.243.125.69"
       }
     }
   },
