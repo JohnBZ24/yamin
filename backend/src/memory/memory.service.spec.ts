@@ -58,6 +58,12 @@ describe('MemoryService', () => {
         listConversations: jest.fn().mockResolvedValue([]),
         listTurns: jest.fn().mockResolvedValue([]),
       } as any,
+      {
+        listForAiContext: jest
+          .fn()
+          .mockResolvedValue({ past: [], upcoming: [] }),
+        listForUser: jest.fn().mockResolvedValue([]),
+      } as any,
       { submitToQueue: jest.fn().mockResolvedValue({}) } as any,
       {
         getOrThrow: () => ({

@@ -254,6 +254,21 @@ export type ChatTurnRecord = {
   createdAt: string;
 };
 
+/**
+ * A reminder Yamin scheduled. `sent` ones are its own history — the record that
+ * used to vanish with the queue job, which is why it could never answer "what
+ * did you remind me about?".
+ */
+export type Reminder = {
+  id: number;
+  title: string;
+  scheduledFor: string;
+  timezone: string | null;
+  status: 'scheduled' | 'sent' | 'failed';
+  deliveredDeviceCount: number;
+  sentAt: string | null;
+};
+
 export type GraphData = {
   nodes: Entity[];
   edges: Array<{
@@ -397,6 +412,10 @@ export const api = {
 
   entities: (token: string, limit = 50) =>
     request<Entity[]>(`/memory/entities?limit=${limit}`, { token }),
+
+  /** Upcoming reminders first, then ones already sent. */
+  reminders: (token: string, limit = 20) =>
+    request<Reminder[]>(`/memory/reminders?limit=${limit}`, { token }),
 
   /** Top entities plus every relation among them, in one round-trip. */
   graph: (token: string, limit = 60) =>

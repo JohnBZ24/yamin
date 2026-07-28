@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
-import { api, ConversationSummary, Entity } from '../lib/api';
+import { api, ConversationSummary, Entity, Reminder } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
 
@@ -43,6 +43,7 @@ export function MemorySidebar({
   const router = useRouter();
   const [entities, setEntities] = useState<Entity[]>([]);
   const [recentChats, setRecentChats] = useState<ConversationSummary[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof api.entity>> | null>(
     null,
@@ -57,6 +58,10 @@ export function MemorySidebar({
     api
       .chats(token, 4)
       .then((list) => !cancelled && setRecentChats(list))
+      .catch(() => {});
+    api
+      .reminders(token, 4)
+      .then((list) => !cancelled && setReminders(list))
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -214,6 +219,22 @@ export function MemorySidebar({
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.listHeader}>
+            {/* Yamin's own actions, not the user's notes. Shown because a
+                reminder that fires and leaves no trace is indistinguishable
+                from one that was never set. */}
+            {reminders.length > 0 && (
+              <View style={styles.chatsSection}>
+                <View style={styles.chatsHead}>
+                  <Text style={[type.label, { color: colors.textSubtle }]}>
+                    Reminders
+                  </Text>
+                </View>
+                {reminders.map((reminder) => (
+                  <ReminderRow key={reminder.id} reminder={reminder} />
+                ))}
+              </View>
+            )}
+
             {recentChats.length > 0 && (
               <View style={styles.chatsSection}>
                 <View style={styles.chatsHead}>
@@ -298,6 +319,45 @@ export function MemorySidebar({
           <Text style={[type.smallMedium, { color: colors.textMuted }]}>Sign out</Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+/**
+ * One reminder. A sent one is history and a pending one is a promise, so they
+ * are drawn differently — a single undifferentiated list would leave the user
+ * unable to tell what is still coming.
+ */
+function ReminderRow({ reminder }: { reminder: Reminder }) {
+  const { colors } = useTokens();
+  const sent = reminder.status === 'sent';
+  const failed = reminder.status === 'failed';
+
+  const when = new Date(reminder.scheduledFor).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  return (
+    <View style={styles.chatRow}>
+      <Feather
+        name={failed ? 'alert-circle' : sent ? 'check' : 'clock'}
+        size={13}
+        color={failed ? colors.dangerText : sent ? colors.successText : colors.brandText}
+      />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          numberOfLines={1}
+          style={[type.small, { color: colors.textMuted }]}
+        >
+          {reminder.title}
+        </Text>
+        <Text style={[type.mono, { color: colors.textSubtle }]}>
+          {sent ? 'sent' : failed ? 'failed' : 'upcoming'} · {when}
+        </Text>
+      </View>
     </View>
   );
 }

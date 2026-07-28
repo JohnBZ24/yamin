@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Line, Rect, Text as SvgText } from 'react-native-svg';
 import {
@@ -47,19 +47,29 @@ const pressProps = (handler: () => void) =>
     : { onPress: handler };
 
 const PAD = 44;
-/** Below this the layout has visually settled; keep animating past it and the
- * graph shivers forever, stop sooner and it freezes mid-flight. */
+/** Below this the layout has visually settled — running on past it only shivers. */
 const REST_ALPHA = 0.015;
+/** Ceiling on ticks per solve, so a pathological graph can't hang the thread. */
+const MAX_TICKS = 400;
+/** A reheat after a tap starts from a settled layout and needs far less work. */
+const RESELECT_TICKS = 140;
 
 /**
- * The knowledge graph as a LIVE force simulation.
+ * The knowledge graph, laid out by a force simulation that is SOLVED rather
+ * than animated.
  *
- * The layout animates: nodes spread from the centre and settle, and tapping a
- * node reheats the simulation with that node pulled toward the middle, so the
- * graph physically rearranges itself around what you're looking at. Its
- * connected relations light up with their type as a label — the preview of
- * what Yamin actually knows about that thing — while everything unrelated
- * fades back.
+ * It used to drive d3 from requestAnimationFrame and bump a counter every tick,
+ * which re-rendered the entire SVG — every node, its two labels, and every edge
+ * — sixty times a second. On a phone that is hundreds of re-renders per
+ * interaction and the graph was visibly unusable. Worse, tapping a node changed
+ * the container height, which rebuilt the simulation from scratch.
+ *
+ * So the simulation now runs to rest inside one synchronous pass and the result
+ * is painted exactly once. Tapping a node reheats it with that node pulled
+ * toward the middle and re-solves the same way: one pass, one render, no frame
+ * loop at all. Its connected relations light up with their type as a label —
+ * the preview of what Yamin actually knows about that thing — while everything
+ * unrelated fades back.
  */
 export function KnowledgeGraph({
   token,
@@ -78,13 +88,16 @@ export function KnowledgeGraph({
   const [data, setData] = useState<GraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const nodesRef = useRef<SimNode[]>([]);
-  const linksRef = useRef<SimLink[]>([]);
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
-  const rafRef = useRef<number | null>(null);
-  // Positions live in refs (d3 mutates them in place); this counter is what
-  // tells React "the world moved, paint it again".
-  const [, setFrame] = useState(0);
+  /**
+   * The solved layout. d3 mutates its node objects in place, so what is stored
+   * is a SNAPSHOT of the positions — publishing the mutable array would let a
+   * later solve silently change what React already painted.
+   */
+  const [layout, setLayout] = useState<{
+    nodes: SimNode[];
+    links: SimLink[];
+  }>({ nodes: [], links: [] });
 
   useEffect(() => {
     let cancelled = false;
@@ -97,13 +110,53 @@ export function KnowledgeGraph({
     };
   }, [token]);
 
+  /**
+   * Run the simulation to rest and publish the result. One pass, one render.
+   *
+   * Clamping happens per tick rather than once at the end: the charge force
+   * happily flings a loosely-connected node off a small viewport, and letting
+   * it travel out there for 400 ticks before yanking it back distorts
+   * everything it pushed against on the way.
+   */
+  const solve = useCallback(
+    (ticks: number) => {
+      const sim = simRef.current;
+      if (!sim) return;
+
+      for (let i = 0; i < ticks; i += 1) {
+        sim.tick();
+        for (const n of sim.nodes()) {
+          n.x = Math.min(width - PAD, Math.max(PAD, n.x ?? 0));
+          n.y = Math.min(height - PAD, Math.max(PAD, n.y ?? 0));
+        }
+        if (sim.alpha() <= REST_ALPHA) break;
+      }
+
+      // Snapshot: d3 keeps mutating the objects it owns, and a rendered frame
+      // must not change underneath React.
+      setLayout({
+        nodes: sim.nodes().map((n) => ({ ...n })),
+        links: (
+          sim.force('link') as ReturnType<typeof forceLink<SimNode, SimLink>>
+        )
+          .links()
+          .map((l) => ({
+            ...l,
+            source: { ...(l.source as SimNode) },
+            target: { ...(l.target as SimNode) },
+          })),
+      });
+    },
+    [width, height],
+  );
+
   // Build the simulation whenever the data or viewport changes.
   useEffect(() => {
     if (!data || data.nodes.length === 0) return;
 
     // Seed positions on a small ring rather than all at the exact centre —
     // coincident points give the charge force nothing to push against on the
-    // first frames.
+    // first ticks.
     const nodes: SimNode[] = data.nodes.map((n, i) => {
       const angle = (i / data.nodes.length) * 2 * Math.PI;
       return {
@@ -145,48 +198,16 @@ export function KnowledgeGraph({
       .force('focusY', forceY<SimNode>(height / 2).strength(0))
       .stop();
 
-    nodesRef.current = nodes;
-    linksRef.current = links;
     simRef.current = simulation;
-
-    startLoop();
+    solve(MAX_TICKS);
 
     return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
       simRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, width, height]);
+  }, [data, width, height, solve]);
 
-  /** Drives the simulation with requestAnimationFrame until it settles. */
-  const startLoop = () => {
-    if (rafRef.current != null) return; // already running
-    const step = () => {
-      const sim = simRef.current;
-      if (!sim) {
-        rafRef.current = null;
-        return;
-      }
-      sim.tick();
-      // Keep everything on screen — the charge force happily flings loners
-      // off the edge of a small viewport.
-      for (const n of nodesRef.current) {
-        n.x = Math.min(width - PAD, Math.max(PAD, n.x ?? 0));
-        n.y = Math.min(height - PAD, Math.max(PAD, n.y ?? 0));
-      }
-      setFrame((f) => f + 1);
-      if (sim.alpha() > REST_ALPHA) {
-        rafRef.current = requestAnimationFrame(step);
-      } else {
-        rafRef.current = null;
-      }
-    };
-    rafRef.current = requestAnimationFrame(step);
-  };
-
-  // Selection: pull the chosen node toward the centre and let everything
-  // re-settle around it — the "graph rearranges itself" moment.
+  // Selection: pull the chosen node toward the centre and re-solve, so the
+  // graph rearranges itself around what you're looking at.
   useEffect(() => {
     const sim = simRef.current;
     if (!sim) return;
@@ -194,9 +215,33 @@ export function KnowledgeGraph({
     (sim.force('focusX') as ReturnType<typeof forceX<SimNode>>)?.strength(strength);
     (sim.force('focusY') as ReturnType<typeof forceY<SimNode>>)?.strength(strength);
     sim.alpha(selectedId != null ? 0.55 : 0.25);
-    startLoop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
+    solve(RESELECT_TICKS);
+  }, [selectedId, solve]);
+
+  /**
+   * What the selection lights up. Derived once per solve rather than inline,
+   * because `isConnected` is called for every edge several times over during a
+   * render and this is the largest list in the component.
+   *
+   * Declared above the early returns: hooks cannot live behind a condition.
+   */
+  const { nodes, links, neighbourIds } = useMemo(() => {
+    const isConnected = (l: SimLink) =>
+      (l.source as SimNode).id === selectedId ||
+      (l.target as SimNode).id === selectedId;
+
+    const ids = new Set<number>();
+    if (selectedId != null) {
+      ids.add(selectedId);
+      for (const l of layout.links) {
+        if (isConnected(l)) {
+          ids.add((l.source as SimNode).id);
+          ids.add((l.target as SimNode).id);
+        }
+      }
+    }
+    return { nodes: layout.nodes, links: layout.links, neighbourIds: ids };
+  }, [layout, selectedId]);
 
   if (error) {
     return (
@@ -225,21 +270,9 @@ export function KnowledgeGraph({
     );
   }
 
-  const nodes = nodesRef.current;
-  const links = linksRef.current;
   const hasSelection = selectedId != null;
   const isConnected = (l: SimLink) =>
     (l.source as SimNode).id === selectedId || (l.target as SimNode).id === selectedId;
-  const neighbourIds = new Set<number>();
-  if (hasSelection) {
-    neighbourIds.add(selectedId);
-    for (const l of links) {
-      if (isConnected(l)) {
-        neighbourIds.add((l.source as SimNode).id);
-        neighbourIds.add((l.target as SimNode).id);
-      }
-    }
-  }
 
   return (
     <Svg width={width} height={height}>

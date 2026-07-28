@@ -3,8 +3,6 @@ import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,9 +15,11 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 
 import { api, AskSource, ConverseResponse } from '../lib/api';
 import { MarkdownText } from '../components/markdown-text';
+import { useKeyboardOffset } from '../hooks/use-keyboard-offset';
 import { useSession } from '../hooks/use-session';
 import { randomUuid } from '../lib/uuid';
 import { radius, space, type } from '../theme/tokens';
+import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 
 type Turn = {
@@ -46,6 +46,8 @@ export default function ChatScreen() {
   const { colors } = useTokens();
   const router = useRouter();
   const { c } = useLocalSearchParams<{ c?: string }>();
+  const { pad, columnWidth } = useLayout();
+  const keyboardOffset = useKeyboardOffset();
   const { ready, token } = useSession();
   const [conversationUuid, setConversationUuid] = useState<string | null>(c ?? null);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -82,6 +84,15 @@ export default function ChatScreen() {
       cancelled = true;
     };
   }, [c, token]);
+
+  // Lifting the input bar shortens the thread; keep the newest turn in view.
+  useEffect(() => {
+    if (keyboardOffset === 0) return;
+    const frame = requestAnimationFrame(() =>
+      scrollRef.current?.scrollToEnd({ animated: true }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [keyboardOffset]);
 
   const ask = async (question: string) => {
     const trimmed = question.trim();
@@ -204,114 +215,129 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      <KeyboardAvoidingView
+      <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        contentContainerStyle={[
+          styles.feed,
+          { paddingHorizontal: pad, paddingTop: pad },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
-        <ScrollView
-          ref={scrollRef}
-          style={{ flex: 1 }}
-          contentContainerStyle={styles.feed}
-          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-        >
-          <View style={styles.column}>
-            {loadingHistory ? (
-              <View style={styles.empty}>
-                <ActivityIndicator color={colors.textMuted} />
+        <View style={[styles.column, { width: columnWidth }]}>
+          {loadingHistory ? (
+            <View style={styles.empty}>
+              <ActivityIndicator color={colors.textMuted} />
+            </View>
+          ) : turns.length === 0 ? (
+            <View style={styles.empty}>
+              <Feather name="message-circle" size={26} color={colors.textSubtle} />
+              <Text style={[type.heading, { color: colors.text }]}>
+                Ask anything you have told Yamin
+              </Text>
+              <View style={styles.suggestions}>
+                {SUGGESTIONS.map((s) => (
+                  <Pressable
+                    key={s}
+                    onPress={() => ask(s)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [
+                      styles.suggestion,
+                      {
+                        borderColor: colors.border,
+                        backgroundColor: pressed
+                          ? colors.surfaceHover
+                          : colors.surface,
+                      },
+                    ]}
+                  >
+                    <Text style={[type.small, { color: colors.textMuted }]}>{s}</Text>
+                  </Pressable>
+                ))}
               </View>
-            ) : turns.length === 0 ? (
-              <View style={styles.empty}>
-                <Feather name="message-circle" size={26} color={colors.textSubtle} />
-                <Text style={[type.heading, { color: colors.text }]}>
-                  Ask anything you have told Yamin
-                </Text>
-                <View style={styles.suggestions}>
-                  {SUGGESTIONS.map((s) => (
-                    <Pressable
-                      key={s}
-                      onPress={() => ask(s)}
-                      accessibilityRole="button"
-                      style={({ pressed }) => [
-                        styles.suggestion,
-                        {
-                          borderColor: colors.border,
-                          backgroundColor: pressed
-                            ? colors.surfaceHover
-                            : colors.surface,
-                        },
-                      ]}
-                    >
-                      <Text style={[type.small, { color: colors.textMuted }]}>{s}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            ) : (
-              turns.map((turn) => <ChatTurn key={turn.id} turn={turn} />)
-            )}
-          </View>
-        </ScrollView>
-
-        <View style={[styles.inputBar, { borderTopColor: colors.borderSubtle }]}>
-          <View style={[styles.column, styles.inputRow]}>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              onSubmitEditing={() => ask(draft)}
-              placeholder="Ask about anything you've told Yamin…"
-              placeholderTextColor={colors.textSubtle}
-              accessibilityLabel="Your question"
-              style={[
-                styles.input,
-                type.body,
-                {
-                  color: colors.text,
-                  backgroundColor: colors.surfaceSunken,
-                  borderColor: colors.border,
-                },
-              ]}
-              {...({ outlineStyle: 'none' } as object)}
-            />
-            <Pressable
-              onPress={() => ask(draft)}
-              disabled={busy || !draft.trim()}
-              accessibilityRole="button"
-              accessibilityLabel="Send question"
-              style={[
-                styles.send,
-                {
-                  backgroundColor: colors.brand,
-                  opacity: busy || !draft.trim() ? 0.4 : 1,
-                },
-              ]}
-            >
-              <Feather name="arrow-up" size={18} color={colors.onBrand} />
-            </Pressable>
-          </View>
+            </View>
+          ) : (
+            turns.map((turn) => <ChatTurn key={turn.id} turn={turn} />)
+          )}
         </View>
-      </KeyboardAvoidingView>
+      </ScrollView>
+
+      {/* paddingBottom instead of KeyboardAvoidingView — see useKeyboardOffset. */}
+      <View
+        style={[
+          styles.inputBar,
+          {
+            borderTopColor: colors.borderSubtle,
+            paddingHorizontal: pad,
+            paddingTop: pad,
+            paddingBottom: pad + keyboardOffset,
+          },
+        ]}
+      >
+        <View style={[styles.column, styles.inputRow, { width: columnWidth }]}>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            onSubmitEditing={() => ask(draft)}
+            placeholder="Ask about anything you've told Yamin…"
+            placeholderTextColor={colors.textSubtle}
+            accessibilityLabel="Your question"
+            style={[
+              styles.input,
+              type.body,
+              {
+                color: colors.text,
+                backgroundColor: colors.surfaceSunken,
+                borderColor: colors.border,
+              },
+            ]}
+            {...({ outlineStyle: 'none' } as object)}
+          />
+          <Pressable
+            onPress={() => ask(draft)}
+            disabled={busy || !draft.trim()}
+            accessibilityRole="button"
+            accessibilityLabel="Send question"
+            style={[
+              styles.send,
+              {
+                backgroundColor: colors.brand,
+                opacity: busy || !draft.trim() ? 0.4 : 1,
+              },
+            ]}
+          >
+            <Feather name="arrow-up" size={18} color={colors.onBrand} />
+          </Pressable>
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
 
 function ChatTurn({ turn }: { turn: Turn }) {
   const { colors } = useTokens();
+  const { mineMax, theirsMax } = useLayout();
   const [showSources, setShowSources] = useState(false);
 
   return (
     <View style={styles.turn}>
       <Animated.View
-        entering={FadeInUp.springify().damping(20)}
-        style={[styles.question, { backgroundColor: colors.brand }]}
+        entering={FadeInUp.duration(180)}
+        style={[styles.question, { maxWidth: mineMax, backgroundColor: colors.brand }]}
       >
         <Text style={[type.body, { color: colors.onBrand }]}>{turn.question}</Text>
       </Animated.View>
 
       <Animated.View
-        entering={FadeInDown.springify().damping(20)}
+        entering={FadeInDown.duration(180)}
         style={[
           styles.answer,
-          { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+          {
+            maxWidth: theirsMax,
+            backgroundColor: colors.surface,
+            borderColor: colors.borderSubtle,
+          },
         ]}
       >
         <View style={styles.answerHead}>
@@ -394,8 +420,9 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
-  feed: { padding: space.lg, paddingBottom: space.xxl },
-  column: { width: '100%', maxWidth: 720, alignSelf: 'center', gap: space.lg },
+  feed: { paddingBottom: space.xxl },
+  // Width in pixels from useLayout(); percentages here collapsed on Android.
+  column: { alignSelf: 'center', gap: space.lg },
   empty: { alignItems: 'center', gap: space.md, paddingVertical: space.xxxl },
   suggestions: { gap: space.sm, marginTop: space.md, alignSelf: 'stretch' },
   suggestion: {
@@ -405,9 +432,11 @@ const styles = StyleSheet.create({
     paddingVertical: space.md,
   },
   turn: { gap: space.sm },
+  // maxWidth comes from useLayout() in pixels, not '%'.
   question: {
     alignSelf: 'flex-end',
-    maxWidth: '85%',
+    flexShrink: 1,
+    minWidth: 0,
     borderRadius: radius.lg,
     borderBottomRightRadius: radius.sm,
     paddingHorizontal: space.lg,
@@ -415,7 +444,8 @@ const styles = StyleSheet.create({
   },
   answer: {
     alignSelf: 'flex-start',
-    maxWidth: '92%',
+    flexShrink: 1,
+    minWidth: 0,
     borderWidth: 1,
     borderRadius: radius.lg,
     borderTopLeftRadius: radius.sm,

@@ -11,16 +11,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.10.61:3000"
-      }
-    },
-    "preview": {
-      "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.8:3000"
+        "_comment": "Largely cosmetic for this profile: a dev client embeds no JS bundle, so the app's EXPO_PUBLIC_* values come from the LOCAL .env.local at `expo start` time, not from here. Kept correct anyway — the previous value was a stale DHCP lease (192.168.10.61) that no longer resolves to anything.",
+        "EXPO_PUBLIC_API_URL": "https://yamin.click"
       }
     },
     "production-apk": {

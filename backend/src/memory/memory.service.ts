@@ -21,6 +21,7 @@ import {
   MemoryHit,
 } from './infrastructure/memory.repository';
 import { ChatMessageRepository } from './infrastructure/chat-message.repository';
+import { ReminderRepository } from '../voice/infrastructure/reminder.repository';
 import { VoiceService } from '../voice/voice.service';
 import { SearchMemoryDto } from './dto/search-memory.dto';
 import { AskMemoryDto } from './dto/ask-memory.dto';
@@ -145,6 +146,7 @@ export class MemoryService {
   constructor(
     private readonly memoryRepository: MemoryRepository,
     private readonly chatMessageRepository: ChatMessageRepository,
+    private readonly reminderRepository: ReminderRepository,
     private readonly voiceService: VoiceService,
     private readonly configService: ConfigService<AllConfigType>,
     private readonly openRouterClient: OpenRouterClient,
@@ -242,6 +244,7 @@ export class MemoryService {
       conversationUuid,
       queryRunner,
     );
+    const reminders = await this.remindersBlock(userId, queryRunner);
 
     const ai = this.configService.getOrThrow('ai', { infer: true });
     const { text } = await generateText({
@@ -249,7 +252,7 @@ export class MemoryService {
       // Some warmth here, unlike the ask lane: this is conversation, and a
       // greeting answered identically every time reads as a canned response.
       temperature: 0.4,
-      prompt: this.replyPrompt(dto.message, recent),
+      prompt: this.replyPrompt(dto.message, recent, reminders),
     });
 
     await this.persistTurn(
@@ -282,6 +285,7 @@ export class MemoryService {
       conversationUuid,
       queryRunner,
     );
+    const reminders = await this.remindersBlock(userId, queryRunner);
 
     sink.meta({ conversationUuid, kind: 'chat', sources: [] });
 
@@ -289,7 +293,7 @@ export class MemoryService {
     const result = streamText({
       model: this.openRouterClient.provider(ai.smartModel),
       temperature: 0.4,
-      prompt: this.replyPrompt(dto.message, recent),
+      prompt: this.replyPrompt(dto.message, recent, reminders),
     });
     for await (const chunk of result.textStream) {
       sink.write(chunk);
@@ -309,6 +313,7 @@ export class MemoryService {
   private replyPrompt(
     message: string,
     recent: Array<{ question: string; answer: string }>,
+    reminders: string[] = [],
   ): string {
     return [
       PERSONA,
@@ -322,6 +327,12 @@ export class MemoryService {
       '- Never claim the user told you something. You are not looking at their notes',
       '  right now, so any specific name, date, or number about THEIR life would be',
       '  invented. Talk in general terms instead.',
+      ...(reminders.length
+        ? [
+            '- The one exception is the reminder list below. Those are YOUR actions,',
+            '  not their notes, and they are real — use them freely.',
+          ]
+        : []),
       '- If they ask what you can do, answer concretely and briefly — remembering',
       '  what they tell you, answering from it later, reminders, the people map.',
       '  Two or three sentences, not a feature list.',
@@ -335,8 +346,78 @@ export class MemoryService {
             '',
           ]
         : []),
+      ...reminders,
       `User: ${message}`,
     ].join('\n');
+  }
+
+  /**
+   * What Yamin has done for this user, as opposed to what the user told it.
+   *
+   * Reminders are the one thing Yamin acts on by itself, and until the reminder
+   * table existed they were pure fire-and-forget: a BullMQ job that ran and was
+   * deleted. Asked "what did you remind me about?", the model went looking
+   * through the user's NOTES — where the answer never was — and said it had
+   * nothing. This block is the missing half of its memory, and it goes into
+   * every lane that talks to the user, because the question arrives on all of
+   * them.
+   *
+   * Returns [] when there is nothing, so callers can spread it away entirely
+   * rather than assert an empty list the model then has to reason about.
+   */
+  private async remindersBlock(
+    userId: number,
+    queryRunner?: QueryRunner,
+  ): Promise<string[]> {
+    let past: Awaited<
+      ReturnType<ReminderRepository['listForAiContext']>
+    >['past'] = [];
+    let upcoming: typeof past = [];
+
+    try {
+      ({ past, upcoming } = await this.reminderRepository.listForAiContext(
+        { userId },
+        queryRunner,
+      ));
+    } catch (error) {
+      // Never fail an answer over the reminder sidecar — the memories are the
+      // main event and this is context on top of them.
+      this.logger.warn(
+        `Could not load reminders for context: ${(error as Error).message}`,
+      );
+      return [];
+    }
+
+    if (past.length === 0 && upcoming.length === 0) return [];
+
+    const line = (r: (typeof past)[number], label: string) => {
+      const zone = r.timezone ?? 'UTC';
+      const when = new Intl.DateTimeFormat('en-GB', {
+        timeZone: zone,
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(r.scheduledFor));
+      return `- ${label} ${when} (${zone}) — "${r.title}"`;
+    };
+
+    return [
+      '',
+      'REMINDERS YOU HANDLED FOR THIS USER — your own record of what you did,',
+      'not something they wrote down. SENT means you already notified them;',
+      'UPCOMING means it is scheduled and has not fired yet.',
+      ...past.map((r) =>
+        line(r, r.status === 'sent' ? 'SENT' : r.status.toUpperCase()),
+      ),
+      ...upcoming.map((r) => line(r, 'UPCOMING')),
+      '',
+      'When they ask what you reminded them about, what you have set, or whether',
+      'you notified them — answer from THIS list. It is complete and it is yours.',
+      'Never say you have no record of your reminders while this list has entries,',
+      'and never go looking for them in the memories: they were never stored there.',
+    ];
   }
 
   /** The tail of this conversation, for continuity across turns. */
@@ -435,6 +516,9 @@ export class MemoryService {
           '  "when is the invoice due" -> ask',
           '  "who is Sarah" -> ask',
           '  "what do you know about me" -> ask (it is about THEIR life, not about you)',
+          '  "what reminders did you set for me" -> ask (asking for something back,',
+          '    not asking you to schedule anything new)',
+          '  "did you remind me about the dentist?" -> ask',
           '',
           'Reply "remember" when the user is telling you something to keep, or',
           'asking you to do something for them:',
@@ -553,6 +637,8 @@ export class MemoryService {
       )
     ).slice(-4);
 
+    const reminders = await this.remindersBlock(userId, queryRunner);
+
     // Oldest first, so the reading order IS the chronology. Retrieval ranks by
     // similarity, which left "Fady likes X" and "Fady dislikes X" side by side
     // with no cue as to which came later — and the model, told only to refuse
@@ -668,6 +754,7 @@ export class MemoryService {
       `Question: ${dto.question}`,
       '',
       ...memoriesBlock,
+      ...reminders,
     ].join('\n');
 
     return { conversationUuid, prompt, sources };
@@ -859,6 +946,11 @@ export class MemoryService {
       sources: turn.sources,
       createdAt: turn.createdAt,
     }));
+  }
+
+  /** Reminders Yamin has set for this user: soonest upcoming first, then history. */
+  async listReminders(userId: number, limit = 20, queryRunner?: QueryRunner) {
+    return this.reminderRepository.listForUser({ userId, limit }, queryRunner);
   }
 
   async listEntities(userId: number, limit = 50, queryRunner?: QueryRunner) {

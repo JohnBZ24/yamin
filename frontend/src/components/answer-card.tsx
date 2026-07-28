@@ -5,6 +5,7 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
 import { AskResponse } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
+import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 import { MarkdownText } from './markdown-text';
 
@@ -33,15 +34,18 @@ export type AnswerEntry = {
  */
 export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number }) {
   const { colors } = useTokens();
+  const { mineMax, theirsMax } = useLayout();
 
   return (
     <Animated.View
-      entering={FadeInDown.delay(Math.min(index, 6) * 40).springify().damping(20)}
+      entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(180)}
       style={styles.group}
     >
       {/* What you asked */}
       <View style={styles.right}>
-        <View style={[styles.mine, { backgroundColor: colors.brand }]}>
+        <View
+          style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
+        >
           <View style={styles.askRow}>
             <Feather name="search" size={13} color={colors.onBrandMuted} />
             <Text style={[type.body, { color: colors.onBrand, flex: 1 }]}>
@@ -62,7 +66,11 @@ export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number
         <View
           style={[
             styles.theirs,
-            { backgroundColor: colors.brandSurface, borderColor: colors.brandBorder },
+            {
+              maxWidth: theirsMax,
+              backgroundColor: colors.brandSurface,
+              borderColor: colors.brandBorder,
+            },
           ]}
         >
           <View style={styles.brandRow}>
@@ -134,8 +142,10 @@ const styles = StyleSheet.create({
   group: { gap: space.sm, marginBottom: space.xl },
   right: { flexDirection: 'row', justifyContent: 'flex-end' },
   left: { flexDirection: 'row', justifyContent: 'flex-start' },
+  // maxWidth is supplied per-render from useLayout(), in pixels — see note-card.
   mine: {
-    maxWidth: '85%',
+    flexShrink: 1,
+    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopRightRadius: 4,
@@ -143,7 +153,8 @@ const styles = StyleSheet.create({
   },
   askRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   theirs: {
-    maxWidth: '92%',
+    flexShrink: 1,
+    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopLeftRadius: 4,

@@ -1,17 +1,23 @@
 import { Feather } from '@expo/vector-icons';
-import React from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  type SharedValue,
+} from 'react-native-reanimated';
 
 import { HOLD_TO_RECORD, useVoiceComposer } from '../hooks/use-voice-composer';
 import { radius, space, type } from '../theme/tokens';
+import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 
 const SUGGESTIONS = [
@@ -27,6 +33,14 @@ const STAGE_LABEL: Record<string, string> = {
   transcribing: 'Transcribing…',
   thinking: 'Yamin is thinking…',
 };
+
+/** Drag far enough UP to go hands-free; the finger can then be lifted. */
+const LOCK_DY = -70;
+/** Drag far enough LEFT to throw the take away. */
+const CANCEL_DX = -70;
+
+/** What the finger is currently promising to do when it lets go. */
+type SwipeIntent = 'send' | 'lock' | 'cancel';
 
 /**
  * Capture. Two ways in, deliberately:
@@ -56,6 +70,7 @@ export function Composer({
   showSuggestions: boolean;
 }) {
   const { colors } = useTokens();
+  const { isNarrow } = useLayout();
   const {
     text,
     setText,
@@ -67,7 +82,17 @@ export function Composer({
     submitText,
     startRecording,
     finishRecording,
+    locked,
+    lockRecording,
+    cancelRecording,
   } = useVoiceComposer({ token, onOptimistic, onAsk });
+
+  // What releasing the finger right now would do. Rendered as the hint text so
+  // the gesture is discoverable instead of something you have to be told about.
+  const [intent, setIntent] = useState<SwipeIntent>('send');
+  // Follows the finger. A shared value so the drag runs on the UI thread and
+  // does not re-render the composer on every touch move.
+  const micOffset = useSharedValue({ x: 0, y: 0 });
 
   const hasText = text.trim().length > 0;
 
@@ -77,13 +102,14 @@ export function Composer({
 
   return (
     <View style={styles.wrap}>
-      {showSuggestions && !hasText && (
+      {showSuggestions && !hasText && !isRecording && (
         <SuggestionChips suggestions={SUGGESTIONS} onPick={submitText} />
       )}
 
       <View
         style={[
           styles.bar,
+          isNarrow && styles.barNarrow,
           {
             backgroundColor: colors.surface,
             borderColor: isRecording ? colors.danger : colors.border,
@@ -94,6 +120,8 @@ export function Composer({
           <RecordingIndicator
             durationMs={recorderState.durationMillis ?? 0}
             pulseStyle={pulseStyle}
+            locked={locked}
+            intent={intent}
           />
         ) : (
           <TextInput
@@ -111,9 +139,14 @@ export function Composer({
         <ComposerActions
           hasText={hasText}
           isRecording={isRecording}
+          locked={locked}
+          micOffset={micOffset}
           onSend={() => submitText()}
           onStartRecording={startRecording}
           onFinishRecording={finishRecording}
+          onLock={lockRecording}
+          onCancel={cancelRecording}
+          onIntentChange={setIntent}
         />
       </View>
     </View>
@@ -166,22 +199,44 @@ function SuggestionChips({
   );
 }
 
+/** The live take: how long, and what letting go would do right now. */
 function RecordingIndicator({
   durationMs,
   pulseStyle,
+  locked,
+  intent,
 }: {
   durationMs: number;
   pulseStyle: React.ComponentProps<typeof Animated.View>['style'];
+  locked: boolean;
+  intent: SwipeIntent;
 }) {
   const { colors } = useTokens();
+
+  const hint = locked
+    ? '🔒 hands-free — tap ↑ to send'
+    : !HOLD_TO_RECORD
+      ? 'recording'
+      : intent === 'lock'
+        ? 'release to go hands-free'
+        : intent === 'cancel'
+          ? 'release to cancel'
+          : 'slide up to lock · ‹ slide to cancel';
+
   return (
     <View style={styles.recRow}>
       <Animated.View
         style={[styles.recDot, { backgroundColor: colors.danger }, pulseStyle]}
       />
-      <Text style={[type.bodyMedium, { color: colors.danger }]}>
-        {formatDuration(durationMs)}
-        {HOLD_TO_RECORD ? ' — release to send' : ' — recording'}
+      <Text
+        numberOfLines={1}
+        style={[
+          type.bodyMedium,
+          styles.recLabel,
+          { color: intent === 'cancel' ? colors.dangerText : colors.danger },
+        ]}
+      >
+        {formatDuration(durationMs)} — {hint}
       </Text>
     </View>
   );
@@ -190,17 +245,140 @@ function RecordingIndicator({
 function ComposerActions({
   hasText,
   isRecording,
+  locked,
+  micOffset,
   onSend,
   onStartRecording,
   onFinishRecording,
+  onLock,
+  onCancel,
+  onIntentChange,
 }: {
   hasText: boolean;
   isRecording: boolean;
+  locked: boolean;
+  micOffset: SharedValue<{ x: number; y: number }>;
   onSend: () => void;
   onStartRecording: () => void;
   onFinishRecording: (shouldSend: boolean) => void;
+  onLock: () => void;
+  onCancel: () => void;
+  onIntentChange: (intent: SwipeIntent) => void;
 }) {
   const { colors } = useTokens();
+
+  const intentRef = useRef<SwipeIntent>('send');
+
+  /**
+   * The pan handlers are created ONCE (recreating them mid-gesture drops the
+   * touch), so they must not close over anything that changes. This ref is
+   * repointed at the current callbacks on every render and read through at
+   * call time.
+   *
+   * Not optional: `startRecording` bails out unless `micAllowed` is true, and
+   * that permission arrives asynchronously AFTER the first render — a handler
+   * frozen at mount would have captured `micAllowed: false` and told the user
+   * their microphone was off, forever.
+   */
+  const live = useRef({
+    locked,
+    onStartRecording,
+    onFinishRecording,
+    onLock,
+    onCancel,
+    onIntentChange,
+  });
+  live.current = {
+    locked,
+    onStartRecording,
+    onFinishRecording,
+    onLock,
+    onCancel,
+    onIntentChange,
+  };
+
+  const micStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: micOffset.value.x },
+      { translateY: micOffset.value.y },
+    ],
+  }));
+
+  /**
+   * Hold to record; swipe up to keep recording hands-free; swipe left to throw
+   * it away. Releasing without moving still sends, which is what the button did
+   * before this existed — the gesture adds options rather than replacing one.
+   *
+   * PanResponder rather than react-native-gesture-handler: RN ships it, so this
+   * needs no GestureHandlerRootView and no native rebuild to try.
+   */
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+
+        onPanResponderGrant: () => {
+          intentRef.current = 'send';
+          live.current.onIntentChange('send');
+          micOffset.value = { x: 0, y: 0 };
+          live.current.onStartRecording();
+        },
+
+        onPanResponderMove: (_event, gesture) => {
+          // Up wins over left when the finger is diagonal: locking is the
+          // recoverable outcome, cancelling destroys the take.
+          const next: SwipeIntent =
+            gesture.dy <= LOCK_DY
+              ? 'lock'
+              : gesture.dx <= CANCEL_DX
+                ? 'cancel'
+                : 'send';
+          if (next !== intentRef.current) {
+            intentRef.current = next;
+            live.current.onIntentChange(next);
+          }
+          micOffset.value = {
+            x: Math.min(0, Math.max(gesture.dx, CANCEL_DX * 1.4)),
+            y: Math.min(0, Math.max(gesture.dy, LOCK_DY * 1.4)),
+          };
+        },
+
+        onPanResponderRelease: () => {
+          micOffset.value = { x: 0, y: 0 };
+          const settled = intentRef.current;
+          intentRef.current = 'send';
+          live.current.onIntentChange('send');
+          if (settled === 'lock') {
+            // Written here rather than waiting for the re-render: this view
+            // unmounts as soon as `locked` lands, and an unmount while holding
+            // the responder fires onPanResponderTerminate — which would read a
+            // stale `false` and cancel the recording the user just locked.
+            live.current.locked = true;
+            live.current.onLock();
+            return; // finger is off, recorder keeps running
+          }
+          if (settled === 'cancel') {
+            live.current.onCancel();
+            return;
+          }
+          live.current.onFinishRecording(true);
+        },
+
+        // A call or notification stealing the touch must not leave the recorder
+        // running forever with nobody able to stop it.
+        onPanResponderTerminate: () => {
+          micOffset.value = { x: 0, y: 0 };
+          intentRef.current = 'send';
+          live.current.onIntentChange('send');
+          if (!live.current.locked) live.current.onCancel();
+        },
+      }),
+    // Created once: rebuilding mid-gesture drops the touch. Everything mutable
+    // is reached through `live`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   if (hasText && !isRecording) {
     return (
@@ -210,37 +388,45 @@ function ComposerActions({
     );
   }
 
-  if (HOLD_TO_RECORD) {
-    return (
-      <Pressable
-        onPressIn={onStartRecording}
-        onPressOut={() => onFinishRecording(true)}
-        style={[
-          styles.circle,
-          { backgroundColor: isRecording ? colors.danger : colors.brand },
-        ]}
-      >
-        <Feather name="mic" size={18} color={colors.onBrand} />
-      </Pressable>
-    );
-  }
-
-  if (isRecording) {
+  // Hands-free, or a desktop mid-recording: both need explicit send/cancel,
+  // because in neither case is there a finger left holding the button down.
+  if (isRecording && (locked || !HOLD_TO_RECORD)) {
     return (
       <View style={styles.recActions}>
         <Pressable
           onPress={() => onFinishRecording(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Discard recording"
           style={[styles.circle, { backgroundColor: colors.surfaceSunken }]}
         >
           <Feather name="x" size={18} color={colors.textMuted} />
         </Pressable>
         <Pressable
           onPress={() => onFinishRecording(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Send recording"
           style={[styles.circle, { backgroundColor: colors.brand }]}
         >
           <Feather name="arrow-up" size={18} color={colors.onBrand} />
         </Pressable>
       </View>
+    );
+  }
+
+  if (HOLD_TO_RECORD) {
+    return (
+      <Animated.View
+        {...pan.panHandlers}
+        accessibilityRole="button"
+        accessibilityLabel="Hold to record, slide up to keep recording hands-free"
+        style={[
+          styles.circle,
+          micStyle,
+          { backgroundColor: isRecording ? colors.danger : colors.brand },
+        ]}
+      >
+        <Feather name="mic" size={18} color={colors.onBrand} />
+      </Animated.View>
     );
   }
 
@@ -286,8 +472,12 @@ const styles = StyleSheet.create({
     paddingVertical: space.xs,
     minHeight: 56,
   },
-  input: { flex: 1, paddingVertical: space.md },
+  // Tighter gutters on a phone: 16px each side is a real slice of a 360dp screen.
+  barNarrow: { paddingLeft: space.md },
+  input: { flex: 1, minWidth: 0, paddingVertical: space.md },
   recRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1 },
+  // minWidth:0 lets the hint truncate instead of shoving the buttons off the bar.
+  recLabel: { flexShrink: 1, minWidth: 0 },
   recDot: { width: 10, height: 10, borderRadius: 5 },
   recActions: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   circle: {

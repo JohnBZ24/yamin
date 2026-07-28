@@ -18,6 +18,9 @@ import { useSession } from '../hooks/use-session';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
 
+/** Matches styles.header's minHeight plus its border. */
+const HEADER_HEIGHT = 57;
+
 /**
  * Full-screen map of what Yamin knows. A drawer-width graph is a postage
  * stamp; this view gives the force layout the whole display, with a detail
@@ -51,7 +54,13 @@ export default function GraphScreen() {
   if (!ready) return null;
   if (!token) return <Redirect href="/" />;
 
-  const graphHeight = height - 64 - (selected ? 220 : 0);
+  /**
+   * Constant, and that is the point. This used to subtract the detail panel's
+   * height when something was selected — which changed a prop the simulation
+   * effect depends on, so every single tap tore down the layout and re-seeded
+   * all 60 nodes on a ring. The panel now floats over the graph instead.
+   */
+  const graphHeight = height - HEADER_HEIGHT;
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: colors.canvas }]}>
@@ -148,7 +157,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     minHeight: 56,
   },
+  // Floats over the graph so selecting something never resizes the canvas.
   panel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     borderTopWidth: 1,
     padding: space.lg,
     maxHeight: 220,

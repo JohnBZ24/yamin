@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AiModule } from '../ai/ai.module';
 import { VoiceApiModule } from '../voice/voice-api.module';
+import { VoiceInfrastructureModule } from '../voice/voice-infrastructure.module';
 import { MemoryController } from './memory.controller';
 import { MemoryService } from './memory.service';
 import { MemoryRepository } from './infrastructure/memory.repository';
@@ -22,6 +23,9 @@ import { EntityNodeEntity } from '../voice/infrastructure/entity-node.entity';
     // submitToQueue path as a typed note, so chat-remembered facts get the
     // full pipeline (embedding, extraction, reminders) instead of a fork.
     VoiceApiModule,
+    // ReminderRepository: answering "what did you remind me about?" needs the
+    // record of what Yamin itself scheduled, which lives on the voice side.
+    VoiceInfrastructureModule,
     TypeOrmModule.forFeature([
       VoiceTranscriptEntity,
       EntityNodeEntity,

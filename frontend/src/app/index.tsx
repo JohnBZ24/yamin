@@ -2,24 +2,23 @@ import { Feather } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, { FadeIn, SlideInLeft } from 'react-native-reanimated';
+import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { AnswerCard, AnswerEntry } from '../components/answer-card';
 import { Composer } from '../components/composer';
 import { MemorySidebar } from '../components/memory-sidebar';
 import { NoteCard } from '../components/note-card';
 import { useToast } from '../components/toast';
+import { useKeyboardOffset } from '../hooks/use-keyboard-offset';
 import { useSession } from '../hooks/use-session';
 import { api, VoiceNote } from '../lib/api';
 import { useRealtime } from '../lib/realtime';
@@ -32,7 +31,8 @@ import {
 } from '../lib/notify';
 import { registerForPush } from '../lib/push';
 import { randomUuid } from '../lib/uuid';
-import { BREAKPOINT_DESKTOP, radius, space, type } from '../theme/tokens';
+import { radius, space, type } from '../theme/tokens';
+import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 
 type FeedItem =
@@ -42,8 +42,8 @@ type FeedItem =
 export default function YaminScreen() {
   const { colors } = useTokens();
   const toast = useToast();
-  const { width } = useWindowDimensions();
-  const isDesktop = width >= BREAKPOINT_DESKTOP;
+  const { isDesktop, pad, columnWidth, drawerWidth } = useLayout();
+  const keyboardOffset = useKeyboardOffset();
 
   const { ready, token, signIn, signUp, signOut } = useSession();
   const { socket, online } = useRealtime();
@@ -186,6 +186,17 @@ export default function YaminScreen() {
     };
   }, [socket, toast]);
 
+  // The composer lifting off the keyboard shortens the feed; without this the
+  // last message ends up hidden behind it, which is exactly the message the
+  // user was replying to.
+  useEffect(() => {
+    if (keyboardOffset === 0) return;
+    const frame = requestAnimationFrame(() =>
+      feedRef.current?.scrollToEnd({ animated: true }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [keyboardOffset]);
+
   // Until the stored session is restored, render nothing — flashing the login
   // screen at every signed-in user on cold start reads as being logged out.
   if (!ready) {
@@ -233,6 +244,7 @@ export default function YaminScreen() {
           isDesktop={isDesktop}
           showSidebar={showSidebar}
           sidebarOpen={sidebarOpen}
+          drawerWidth={drawerWidth}
           token={token}
           graphVersion={graphVersion}
           onCloseMobile={() => setSidebarOpen(false)}
@@ -268,47 +280,62 @@ export default function YaminScreen() {
             }}
           />
 
-          <KeyboardAvoidingView
+          <ScrollView
+            ref={feedRef}
             style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            contentContainerStyle={[
+              styles.feed,
+              { paddingHorizontal: pad, paddingTop: pad },
+            ]}
+            keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() =>
+              feedRef.current?.scrollToEnd({ animated: true })
+            }
           >
-            <ScrollView
-              ref={feedRef}
-              style={{ flex: 1 }}
-              contentContainerStyle={styles.feed}
-              onContentSizeChange={() =>
-                feedRef.current?.scrollToEnd({ animated: true })
-              }
-            >
-              {/* Centre column: long lines are unreadable on a wide monitor. */}
-              <View style={styles.column}>
-                <Feed items={feedItems} onDeleteNote={deleteNote} />
-              </View>
-            </ScrollView>
-
-            <View style={[styles.composer, { borderTopColor: colors.borderSubtle }]}>
-              <View style={styles.column}>
-                <Composer
-                  token={token}
-                  onAsk={ask}
-                  showSuggestions={answers.length === 0}
-                  onOptimistic={({ fileUuid, rawText, audioUrl }) =>
-                    setNotes((prev) => [
-                      ...prev,
-                      {
-                        fileUuid,
-                        rawText,
-                        audioUrl,
-                        status: 'pending',
-                        summary: null,
-                        createdAt: new Date().toISOString(),
-                      },
-                    ])
-                  }
-                />
-              </View>
+            {/* Centre column: long lines are unreadable on a wide monitor. */}
+            <View style={[styles.column, { width: columnWidth }]}>
+              <Feed items={feedItems} onDeleteNote={deleteNote} />
             </View>
-          </KeyboardAvoidingView>
+          </ScrollView>
+
+          {/*
+            paddingBottom, not KeyboardAvoidingView: that component was
+            configured to do nothing on Android, and SDK 57's mandatory
+            edge-to-edge means the window no longer resizes for the keyboard
+            either — so the bar simply sat underneath it. See useKeyboardOffset.
+          */}
+          <View
+            style={[
+              styles.composer,
+              {
+                borderTopColor: colors.borderSubtle,
+                paddingHorizontal: pad,
+                paddingTop: pad,
+                paddingBottom: pad + keyboardOffset,
+              },
+            ]}
+          >
+            <View style={[styles.column, { width: columnWidth }]}>
+              <Composer
+                token={token}
+                onAsk={ask}
+                showSuggestions={answers.length === 0}
+                onOptimistic={({ fileUuid, rawText, audioUrl }) =>
+                  setNotes((prev) => [
+                    ...prev,
+                    {
+                      fileUuid,
+                      rawText,
+                      audioUrl,
+                      status: 'pending',
+                      summary: null,
+                      createdAt: new Date().toISOString(),
+                    },
+                  ])
+                }
+              />
+            </View>
+          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -319,6 +346,7 @@ function Sidebar({
   isDesktop,
   showSidebar,
   sidebarOpen,
+  drawerWidth,
   token,
   graphVersion,
   onCloseMobile,
@@ -327,6 +355,7 @@ function Sidebar({
   isDesktop: boolean;
   showSidebar: boolean;
   sidebarOpen: boolean;
+  drawerWidth: number;
   token: string;
   graphVersion: number;
   onCloseMobile: () => void;
@@ -359,9 +388,18 @@ function Sidebar({
           style={[styles.overlay, { backgroundColor: colors.overlay }]}
           onPress={onCloseMobile}
         >
-          <Animated.View
-            entering={SlideInLeft.springify().damping(22)}
-            style={[styles.sidebarMobile, { backgroundColor: colors.canvas }]}
+          {/*
+            No entering animation, deliberately. This was a spring
+            (SlideInLeft.springify().damping(22)) that overshot and wobbled, and
+            it ran while the drawer was mounting a FlatList and firing two API
+            calls — so the bounce stuttered on top of looking wrong. Appearing
+            instantly is both calmer and free.
+          */}
+          <View
+            style={[
+              styles.sidebarMobile,
+              { width: drawerWidth, backgroundColor: colors.canvas },
+            ]}
           >
             {/* Swallows taps so touching the drawer doesn't close it. */}
             <Pressable style={{ flex: 1 }} onPress={() => {}}>
@@ -372,7 +410,7 @@ function Sidebar({
                 onSignOut={onSignOut}
               />
             </Pressable>
-          </Animated.View>
+          </View>
         </Pressable>
       )}
     </>
@@ -748,7 +786,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 100,
   },
-  sidebarMobile: { width: 300, height: '100%' },
+  sidebarMobile: { height: '100%' },
   main: { flex: 1 },
   header: {
     flexDirection: 'row',
@@ -782,11 +820,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
-  feed: { padding: space.lg, paddingBottom: space.xxl },
-  // maxWidth keeps text at a readable measure regardless of monitor size.
-  column: { width: '100%', maxWidth: 720, alignSelf: 'center', gap: space.xl },
+  feed: { paddingBottom: space.xxl },
+  // Width comes from useLayout() in pixels. It used to be `width: '100%'` with
+  // a percentage maxWidth further down the tree, which is what let the bubbles
+  // collapse to one word per line on Android.
+  column: { alignSelf: 'center', gap: space.xl },
   empty: { alignItems: 'center', gap: space.md, paddingVertical: space.xxxl },
-  composer: { padding: space.lg, borderTopWidth: 1 },
+  composer: { borderTopWidth: 1 },
   loginWrap: {
     width: '100%',
     maxWidth: 380,

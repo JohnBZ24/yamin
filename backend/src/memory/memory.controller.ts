@@ -132,6 +132,22 @@ export class MemoryController {
 
   @ApiBearerAuth()
   @ApiOperation({
+    summary: 'Reminders Yamin has set for you — upcoming first, then sent',
+  })
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(QueryRunnerInterceptor)
+  @Get('reminders')
+  @HttpCode(HttpStatus.OK)
+  async reminders(
+    @GetUser() userId: number,
+    @Query('limit') limit = 20,
+    @TransactionQueryRunner() queryRunner: QueryRunner,
+  ) {
+    return this.memoryService.listReminders(userId, Number(limit), queryRunner);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
     summary:
       'Talk to Yamin: questions get answered from memory, information gets remembered (and reminders scheduled), small talk gets a reply',
   })

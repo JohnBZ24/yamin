@@ -12,6 +12,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { VoiceNote } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
+import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 
 /** Playback via expo-audio's useAudioPlayer (expo-av is gone in SDK 57). */
@@ -111,6 +112,7 @@ export function NoteCard({
   onDelete?: () => Promise<void>;
 }) {
   const { colors } = useTokens();
+  const { mineMax, theirsMax } = useLayout();
 
   const tone =
     note.status === 'processed'
@@ -121,14 +123,16 @@ export function NoteCard({
 
   return (
     <Animated.View
-      entering={FadeInDown.delay(Math.min(index, 6) * 40).springify().damping(20)}
+      entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(180)}
       style={styles.group}
     >
       {/* What you said */}
       <View style={styles.right}>
-        <View style={[styles.mine, { backgroundColor: colors.brand }]}>
+        <View
+          style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
+        >
           {note.audioUrl ? <AudioBubble url={note.audioUrl} /> : null}
-          <Text style={[type.body, { color: colors.onBrand }]}>
+          <Text style={[type.body, { color: colors.onBrand, flexShrink: 1 }]}>
             {note.rawText || '…'}
           </Text>
           <View style={styles.mineFoot}>
@@ -148,7 +152,11 @@ export function NoteCard({
         <View
           style={[
             styles.theirs,
-            { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+            {
+              maxWidth: theirsMax,
+              backgroundColor: colors.surface,
+              borderColor: colors.borderSubtle,
+            },
           ]}
         >
           <View style={styles.head}>
@@ -163,7 +171,7 @@ export function NoteCard({
             </View>
           </View>
 
-          <Text style={[type.body, { color: colors.text }]}>
+          <Text style={[type.body, { color: colors.text, flexShrink: 1 }]}>
             {note.summary ?? 'Working through what you said…'}
           </Text>
 
@@ -200,8 +208,12 @@ const styles = StyleSheet.create({
   group: { gap: space.sm, marginBottom: space.xl },
   right: { flexDirection: 'row', justifyContent: 'flex-end' },
   left: { flexDirection: 'row', justifyContent: 'flex-start' },
+  // maxWidth is supplied per-render from useLayout(), in pixels. It used to be
+  // '85%'/'92%' here, which Yoga could resolve against an indefinite parent and
+  // collapse to min-content — that is what rendered messages one word per line.
   mine: {
-    maxWidth: '85%',
+    flexShrink: 1,
+    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     // Squared corner on the sender's side — the standard chat "tail" cue.
@@ -209,7 +221,8 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   theirs: {
-    maxWidth: '92%',
+    flexShrink: 1,
+    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopLeftRadius: 4,

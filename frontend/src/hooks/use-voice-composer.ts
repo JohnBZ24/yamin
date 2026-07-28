@@ -7,6 +7,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
+import { File, UploadType } from 'expo-file-system';
 import {
   useAnimatedStyle,
   useSharedValue,
@@ -58,6 +59,66 @@ function extensionFor(uri: string, blobType: string): string {
 }
 
 /**
+ * Mirrors contentTypeFor() in the backend's VoiceService. On native the file's
+ * own reported mime type is preferred; this is the fallback for when the OS
+ * gives back an empty string, which is what made the multipart part arrive
+ * type-less and unparseable.
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.webm': 'audio/webm',
+  '.ogg': 'audio/ogg',
+  '.aac': 'audio/aac',
+};
+
+function mimeForExtension(extension: string): string {
+  return MIME_BY_EXTENSION[extension.toLowerCase()] ?? 'audio/mp4';
+}
+
+/**
+ * The recording, in whatever form this platform can actually hand to the
+ * network layer.
+ *
+ * This split exists because of a hard React Native limitation: RN's Blob cannot
+ * be constructed from bytes, so `await (await fetch(fileUri)).blob()` — the web
+ * idiom — throws "Creating blobs from 'ArrayBuffer' and 'ArrayBufferView' is
+ * not supported" on a device. Every voice note failed there, before it was even
+ * transcribed. Native never needs a Blob: FormData takes the {uri,name,type}
+ * shape, and expo-file-system streams the file straight to S3.
+ */
+type Recording =
+  | { platform: 'web'; blob: Blob; extension: string; mimeType: string }
+  | { platform: 'native'; file: File; extension: string; mimeType: string };
+
+async function readRecording(uri: string): Promise<Recording> {
+  if (Platform.OS === 'web') {
+    const blob = await (await fetch(uri)).blob();
+    const extension = extensionFor(uri, blob.type ?? '');
+    return {
+      platform: 'web',
+      blob,
+      extension,
+      mimeType: blob.type || mimeForExtension(extension),
+    };
+  }
+
+  const file = new File(uri);
+  if (!file.exists || file.size <= 0) {
+    throw new Error('Recording produced no audio');
+  }
+  const extension = extensionFor(uri, '');
+  return {
+    platform: 'native',
+    file,
+    extension,
+    mimeType: file.type || mimeForExtension(extension),
+  };
+}
+
+/**
  * Owns the record → transcribe → classify → save/ask state machine for the
  * composer, so the component only has to render whatever this returns.
  */
@@ -82,6 +143,12 @@ export function useVoiceComposer({
   // prepareToRecordAsync takes long enough that waiting for isRecording made
   // the button feel dead.
   const [recActive, setRecActive] = useState(false);
+  /**
+   * Hands-free: the user swiped up, so lifting their finger must NOT stop the
+   * recording. While locked the only ways out are the explicit send and cancel
+   * buttons, which is what makes a long note possible without holding the phone.
+   */
+  const [locked, setLocked] = useState(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
@@ -184,6 +251,7 @@ export function useVoiceComposer({
       return;
     }
     setRecActive(true);
+    setLocked(false);
     const starting = (async () => {
       await recorder.prepareToRecordAsync();
       recorder.record();
@@ -231,8 +299,8 @@ export function useVoiceComposer({
         return;
       }
 
-      const blob = await (await fetch(uri)).blob();
-      const extension = extensionFor(uri, blob.type ?? '');
+      const recording = await readRecording(uri);
+      const { extension, mimeType } = recording;
 
       // Transcribe FIRST, then decide. Speaking a question is as natural as
       // typing one, and a question is not a memory — uploading its audio to S3
@@ -242,9 +310,9 @@ export function useVoiceComposer({
       const localName = `voice${extension}`;
       const { text: rawText } = await transcribe(
         token,
-        Platform.OS === 'web'
-          ? blob
-          : { uri, name: localName, type: blob.type || 'audio/mp4' },
+        recording.platform === 'web'
+          ? recording.blob
+          : { uri, name: localName, type: mimeType },
         localName,
       );
 
@@ -261,16 +329,31 @@ export function useVoiceComposer({
         const { fileUuid, uploadUrl, downloadUrl, contentType } =
           await api.presign(token, extension);
 
-        let putRes: Response;
+        // Must match the ContentType the backend signed with, or S3 rejects the
+        // PUT with a signature mismatch — so the backend tells us instead of
+        // both sides guessing.
+        let status: number;
         try {
-          putRes = await fetch(uploadUrl, {
-            method: 'PUT',
-            // Must match the ContentType the backend signed with, or S3 rejects
-            // the PUT with a signature mismatch — so the backend tells us instead
-            // of both sides guessing.
-            headers: { 'Content-Type': contentType },
-            body: blob,
-          });
+          if (recording.platform === 'web') {
+            status = (
+              await fetch(uploadUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': contentType },
+                body: recording.blob,
+              })
+            ).status;
+          } else {
+            // Streams the file from disk. Deliberately NOT fetch(): putting the
+            // bytes through JS would mean building a Blob, which is exactly
+            // what React Native cannot do.
+            status = (
+              await recording.file.upload(uploadUrl, {
+                httpMethod: 'PUT',
+                uploadType: UploadType.BINARY_CONTENT,
+                headers: { 'Content-Type': contentType },
+              })
+            ).status;
+          }
         } catch {
           // A network-level failure here surfaces as a bare "Failed to fetch".
           // On web the usual culprit is the bucket refusing the browser's CORS
@@ -279,8 +362,8 @@ export function useVoiceComposer({
             'Audio upload failed before reaching storage — check your connection (on web: the S3 bucket needs a CORS rule allowing PUT)',
           );
         }
-        if (!putRes.ok) {
-          throw new Error(`Audio upload was rejected by storage (${putRes.status})`);
+        if (status < 200 || status >= 300) {
+          throw new Error(`Audio upload was rejected by storage (${status})`);
         }
 
         return { audioUrl: downloadUrl, fileUuid };
@@ -291,6 +374,7 @@ export function useVoiceComposer({
     } finally {
       startPromiseRef.current = null;
       setRecActive(false);
+      setLocked(false);
       finishingRef.current = false;
     }
   };
@@ -306,5 +390,9 @@ export function useVoiceComposer({
     submitText,
     startRecording,
     finishRecording,
+    /** Hands-free after a swipe up: a finger release no longer ends the take. */
+    locked,
+    lockRecording: () => setLocked(true),
+    cancelRecording: () => finishRecording(false),
   };
 }

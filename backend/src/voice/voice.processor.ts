@@ -15,6 +15,7 @@ import { VoiceTranscriptRepository } from './infrastructure/voice-transcript.rep
 import { EntityNodeRepository } from './infrastructure/entity-node.repository';
 import { EntityRelationRepository } from './infrastructure/entity-relation.repository';
 import { NodeMentionRepository } from './infrastructure/node-mention.repository';
+import { ReminderRepository } from './infrastructure/reminder.repository';
 import {
   EntityNodeType,
   EntityRelationType,
@@ -115,6 +116,7 @@ export class VoiceProcessor extends WorkerHost {
     private readonly nodeRepository: EntityNodeRepository,
     private readonly relationRepository: EntityRelationRepository,
     private readonly mentionRepository: NodeMentionRepository,
+    private readonly reminderRepository: ReminderRepository,
     @Inject(REALTIME_NOTIFIER)
     private readonly notifier: RealtimeNotifier,
     private readonly configService: ConfigService<AllConfigType>,
@@ -170,11 +172,21 @@ export class VoiceProcessor extends WorkerHost {
         .join('\n');
 
       // 2. Trigger Tools / Actions (e.g. Schedule reminders, create tasks)
+      //
+      // The transcript is resolved up front only so a scheduled reminder can
+      // record which note asked for it. A missing row is not fatal here — the
+      // reminder still matters, it just loses its provenance — and the write
+      // path below throws on a genuinely absent transcript anyway.
+      const existing = await this.voiceRepository.findOne({
+        fields: { fileUuid } as any,
+      });
+
       const reminderConfirmation = await this.triggerAiSecretaryTools(
         rawText,
         userId,
         timezone,
         recentContext,
+        existing?.id ?? null,
       );
 
       // 3. Extract Structured Graph (Summary, Nodes, Relations).
@@ -402,6 +414,7 @@ export class VoiceProcessor extends WorkerHost {
     userId: number,
     timezoneHint?: string,
     recentContext = '',
+    voiceTranscriptId: number | null = null,
   ): Promise<string | null> {
     if (this.isMockProvider) {
       this.logger.warn('MOCK provider: skipping tool execution.');
@@ -504,9 +517,23 @@ export class VoiceProcessor extends WorkerHost {
             this.logger.log(
               `Scheduling reminder ${describe} (${Math.round(delayMs / 60_000)}m from now) for user ${userId}`,
             );
-            await this.remindersQueue.add(
+
+            // Recorded BEFORE the job exists, and that order is the whole
+            // point: BullMQ removes a job once it has run, so a queue-first
+            // design left no trace of any reminder that actually fired. Row
+            // first means Yamin can always answer "what did you remind me
+            // about?", including for reminders still pending.
+            const record = await this.reminderRepository.schedule({
+              userId,
+              voiceTranscriptId,
+              title,
+              scheduledFor: target,
+              timezone,
+            });
+
+            const job = await this.remindersQueue.add(
               'reminder-job',
-              { title, userId },
+              { title, userId, reminderId: record.id },
               {
                 delay: delayMs,
                 attempts: 3,
@@ -514,6 +541,9 @@ export class VoiceProcessor extends WorkerHost {
                 removeOnComplete: { age: 86_400 },
               },
             );
+            if (job.id) {
+              await this.reminderRepository.attachJobId(record.id, job.id);
+            }
 
             // Includes the DAY whenever it isn't today. "Reminder set for 4:51 PM"
             // is indistinguishable from a reminder scheduled in the past when the
