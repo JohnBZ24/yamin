@@ -9,6 +9,14 @@ import { useTokens } from '../theme/use-tokens';
  * lists) instead of showing raw asterisks. The web build swaps this file for
  * markdown-text.web.tsx, which uses Vercel's Streamdown — a renderer built
  * for text that is still streaming in.
+ *
+ * This import is why `punycode` is a direct dependency in package.json — do
+ * not prune it as unused. react-native-markdown-display pulls in markdown-it,
+ * which does `require('punycode')` expecting the Node builtin. Metro doesn't
+ * ship Node builtins, so the Android bundle failed to resolve it and the whole
+ * EAS build died; the npm package is the userland shim that satisfies it.
+ * Nothing caught this before the first APK attempt because web never bundles
+ * markdown-it at all — it takes the Streamdown file instead.
  */
 export function MarkdownText({ children }: { children: string }) {
   const { colors } = useTokens();
