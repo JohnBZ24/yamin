@@ -72,6 +72,44 @@ jobs:
             sleep 5
           done
 
+          echo "==> Verifying the PUBLIC path, through nginx"
+          # The check above talks to 127.0.0.1:3000 — the container's published
+          # loopback port. That proves the API booted; it proves nothing about
+          # whether anyone on the internet can reach it, because it never
+          # touches nginx.
+          #
+          # That gap shipped a fully broken production once already: `up -d`
+          # recreated backend-api on a new container IP, nginx went on dialling
+          # the old one, and every /api request returned 502 — while this step
+          # went green and the deploy reported success. Both containers were
+          # healthy. Only the wire between them was dead, and nothing looked at
+          # the wire.
+          #
+          # Read the domain from the file setup.sh persists, not from $DOMAIN:
+          # the secret may be unset, and an empty domain here would silently
+          # test plain HTTP and accept the 301 to HTTPS as a pass.
+          EFFECTIVE_DOMAIN="$(cat nginx/conf.d/.domain 2>/dev/null || true)"
+          if [ -n "$EFFECTIVE_DOMAIN" ]; then
+            HEALTH_ARGS="--resolve $EFFECTIVE_DOMAIN:443:127.0.0.1 https://$EFFECTIVE_DOMAIN/api/v1/health/ready"
+          else
+            HEALTH_ARGS="http://127.0.0.1/api/v1/health/ready"
+          fi
+          for i in $(seq 1 12); do
+            # Assert 200 explicitly. `curl -f` treats a 301 as success, which is
+            # exactly what the HTTP-only branch would get back.
+            code="$(curl -sS -o /dev/null -w '%{http_code}' $HEALTH_ARGS 2>/dev/null || echo 000)"
+            if [ "$code" = 200 ]; then
+              echo "Public API path OK (nginx -> backend-api)."
+              break
+            fi
+            [ "$i" = 12 ] && {
+              echo "nginx cannot reach the API (last status: $code) — the site is down for real users."
+              docker compose logs --tail 50 nginx
+              exit 1
+            }
+            sleep 5
+          done
+
           echo "==> Pruning old images"
           docker image prune -f
 
