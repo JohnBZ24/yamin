@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { api, ConversationSummary } from '../lib/api';
 import { useSession } from '../hooks/use-session';
+import { ConversationSummary } from '../lib/api';
+import { useChats, useDeleteChat } from '../lib/queries';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
 
@@ -24,20 +25,8 @@ export default function ChatsScreen() {
   const { colors } = useTokens();
   const router = useRouter();
   const { ready, token } = useSession();
-  const [chats, setChats] = useState<ConversationSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    api
-      .chats(token)
-      .then((list) => !cancelled && setChats(list))
-      .catch((e) => !cancelled && setError(e.message ?? 'Could not load your chats'));
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  const { data: chats, error, isPending } = useChats(token);
+  const deleteChat = useDeleteChat(token);
 
   if (!ready) return null;
   if (!token) return <Redirect href="/" />;
@@ -66,9 +55,11 @@ export default function ChatsScreen() {
 
       {error ? (
         <View style={styles.empty}>
-          <Text style={[type.small, { color: colors.dangerText }]}>{error}</Text>
+          <Text style={[type.small, { color: colors.dangerText }]}>
+            {(error as any).message ?? 'Could not load your chats'}
+          </Text>
         </View>
-      ) : chats === null ? (
+      ) : isPending ? (
         <View style={styles.empty}>
           <ActivityIndicator color={colors.textMuted} />
         </View>
@@ -89,37 +80,13 @@ export default function ChatsScreen() {
             </View>
           }
           renderItem={({ item }) => (
-            <Pressable
-              onPress={() =>
+            <ChatRow
+              chat={item}
+              onOpen={() =>
                 router.push({ pathname: '/chat', params: { c: item.conversationUuid } })
               }
-              accessibilityRole="button"
-              style={({ pressed }) => [
-                styles.row,
-                {
-                  backgroundColor: pressed ? colors.surfaceHover : colors.surface,
-                  borderColor: colors.borderSubtle,
-                },
-              ]}
-            >
-              <Feather name="message-circle" size={16} color={colors.textMuted} />
-              <View style={{ flex: 1 }}>
-                <Text
-                  numberOfLines={1}
-                  style={[type.bodyMedium, { color: colors.text }]}
-                >
-                  {item.title}
-                </Text>
-                <Text style={[type.mono, { color: colors.textSubtle }]}>
-                  {item.turnCount} turn{item.turnCount === 1 ? '' : 's'} ·{' '}
-                  {new Date(item.lastAt).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={16} color={colors.textSubtle} />
-            </Pressable>
+              onDelete={() => deleteChat.mutate(item.conversationUuid)}
+            />
           )}
         />
       )}
@@ -127,8 +94,89 @@ export default function ChatsScreen() {
   );
 }
 
+/**
+ * One conversation, with a two-tap delete.
+ *
+ * Two taps rather than a confirm dialog because `Alert.alert` is a no-op in
+ * react-native-web, so a dialog would make the web build silently delete with no
+ * confirmation at all. The first tap arms and labels itself, the second deletes,
+ * and it disarms on its own if the user moves on — see the same pattern in
+ * note-card.tsx.
+ */
+function ChatRow({
+  chat,
+  onOpen,
+  onDelete,
+}: {
+  chat: ConversationSummary;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const { colors } = useTokens();
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  return (
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      style={({ pressed }) => [
+        styles.row,
+        {
+          backgroundColor: pressed ? colors.surfaceHover : colors.surface,
+          borderColor: armed ? colors.danger : colors.borderSubtle,
+        },
+      ]}
+    >
+      <Feather name="message-circle" size={16} color={colors.textMuted} />
+      <View style={styles.rowText}>
+        <Text numberOfLines={1} style={[type.bodyMedium, { color: colors.text }]}>
+          {chat.title}
+        </Text>
+        <Text style={[type.mono, { color: colors.textSubtle }]}>
+          {chat.turnCount} turn{chat.turnCount === 1 ? '' : 's'} ·{' '}
+          {new Date(chat.lastAt).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+          })}
+        </Text>
+      </View>
+
+      <Pressable
+        // Stops the row's own onPress from firing, which would navigate into the
+        // chat the user is trying to delete.
+        onPress={(event) => {
+          event.stopPropagation();
+          if (armed) onDelete();
+          else setArmed(true);
+        }}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel={armed ? 'Confirm delete chat' : 'Delete chat'}
+        style={styles.deleteBtn}
+      >
+        {armed && (
+          <Text style={[type.mono, { color: colors.dangerText }]}>tap to delete</Text>
+        )}
+        <Feather
+          name={armed ? 'x-circle' : 'trash-2'}
+          size={15}
+          color={armed ? colors.dangerText : colors.textSubtle}
+        />
+      </Pressable>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  rowText: { flex: 1 },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

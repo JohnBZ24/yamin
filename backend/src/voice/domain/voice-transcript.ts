@@ -19,6 +19,10 @@ export class VoiceTranscript {
   @Expose()
   summary: string | null;
 
+  /** Amplitude envelope of the recording, 0–100 per slice. Null when there is no audio. */
+  @Expose()
+  peaks: number[] | null;
+
   @Expose()
   embedding: number[] | null;
 

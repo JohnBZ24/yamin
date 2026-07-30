@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -11,12 +12,15 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardStickyView } from '../lib/keyboard-controller';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 
 import { api, AskSource, ConverseResponse } from '../lib/api';
 import { MarkdownText } from '../components/markdown-text';
-import { useKeyboardOffset } from '../hooks/use-keyboard-offset';
+import { useKeyboardInset } from '../hooks/use-keyboard-inset';
 import { useSession } from '../hooks/use-session';
+import { useVoiceDictation } from '../hooks/use-voice-dictation';
+import { queryKeys, useChatHistory } from '../lib/queries';
 import { randomUuid } from '../lib/uuid';
 import { radius, space, type } from '../theme/tokens';
 import { useLayout } from '../theme/use-layout';
@@ -47,52 +51,73 @@ export default function ChatScreen() {
   const router = useRouter();
   const { c } = useLocalSearchParams<{ c?: string }>();
   const { pad, columnWidth } = useLayout();
-  const keyboardOffset = useKeyboardOffset();
+  const { bottomInset, keyboardVisible } = useKeyboardInset();
   const { ready, token } = useSession();
-  const [conversationUuid, setConversationUuid] = useState<string | null>(c ?? null);
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(!!c);
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  /**
+   * Past turns are the server's, live ones are this screen's.
+   *
+   * Reopening a conversation used to fetch it and copy the records into the
+   * same `turns` state the streaming code appends to, which meant one array
+   * held two kinds of thing with different owners. Keeping them apart and
+   * concatenating at render time means revisiting a chat is served from cache
+   * instantly, and the streaming path never has to be careful not to clobber
+   * history.
+   */
+  const { data: history = [], isPending } = useChatHistory(token, c ?? null);
+  const loadingHistory = !!c && isPending;
+  const [liveTurns, setLiveTurns] = useState<Turn[]>([]);
+
+  /**
+   * The conversation this screen is writing to. The route param wins when
+   * present; a chat started fresh has no param until the server issues an id
+   * on the first streamed turn, which is what `adopted` holds.
+   */
+  const [adopted, setAdopted] = useState<string | null>(null);
+  const conversationUuid = c ?? adopted;
+
+  // Switching threads (including `startFresh`, which clears the param) must
+  // not carry the previous thread's live turns across.
+  useEffect(() => {
+    setLiveTurns([]);
+    setAdopted(null);
+  }, [c]);
+
+  const historyTurns = useMemo<Turn[]>(
+    () =>
+      history.map((r, i) => ({
+        // Stable across renders: history is append-only and ordered, so the
+        // position is a real identity. randomUuid() here would mint new keys
+        // on every render and remount every bubble.
+        id: `history:${i}`,
+        question: r.question,
+        result: { answer: r.answer, sources: r.sources },
+      })),
+    [history],
+  );
+
+  const turns = useMemo(
+    () => [...historyTurns, ...liveTurns],
+    [historyTurns, liveTurns],
+  );
 
   // `sending` covers the whole streamed turn — with streaming, result stops
   // being null after the first chunk, but the turn isn't done until the
   // stream closes.
   const busy = sending || turns.some((t) => t.result === null && !t.error);
 
-  // Reopening a past conversation: fetch its turns once.
-  useEffect(() => {
-    if (!c || !token) return;
-    let cancelled = false;
-    api
-      .chat(token, c)
-      .then((records) => {
-        if (cancelled) return;
-        setTurns(
-          records.map((r) => ({
-            id: randomUuid(),
-            question: r.question,
-            result: { answer: r.answer, sources: r.sources },
-          })),
-        );
-        setConversationUuid(c);
-      })
-      .catch(() => {})
-      .finally(() => !cancelled && setLoadingHistory(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [c, token]);
-
   // Lifting the input bar shortens the thread; keep the newest turn in view.
   useEffect(() => {
-    if (keyboardOffset === 0) return;
+    if (!keyboardVisible) return;
     const frame = requestAnimationFrame(() =>
       scrollRef.current?.scrollToEnd({ animated: true }),
     );
     return () => cancelAnimationFrame(frame);
-  }, [keyboardOffset]);
+  }, [keyboardVisible]);
 
   const ask = async (question: string) => {
     const trimmed = question.trim();
@@ -100,7 +125,7 @@ export default function ChatScreen() {
     setDraft('');
     setSending(true);
     const id = randomUuid();
-    setTurns((prev) => [...prev, { id, question: trimmed, result: null }]);
+    setLiveTurns((prev) => [...prev, { id, question: trimmed, result: null }]);
     try {
       // Streamed: the bubble fills in as the model writes, instead of a
       // spinner for the whole generation.
@@ -110,8 +135,8 @@ export default function ChatScreen() {
         (meta) => {
           // First turn of a fresh chat: adopt the server-issued conversation
           // id so every later turn lands in the same thread.
-          setConversationUuid(meta.conversationUuid);
-          setTurns((prev) =>
+          setAdopted(meta.conversationUuid);
+          setLiveTurns((prev) =>
             prev.map((t) =>
               t.id === id
                 ? {
@@ -123,7 +148,7 @@ export default function ChatScreen() {
           );
         },
         (chunk) => {
-          setTurns((prev) =>
+          setLiveTurns((prev) =>
             prev.map((t) =>
               t.id === id && t.result
                 ? {
@@ -141,8 +166,8 @@ export default function ChatScreen() {
       // showing an error — the user cares about the answer, not the transport.
       try {
         const result = await api.converse(token, trimmed, conversationUuid ?? undefined);
-        setConversationUuid(result.conversationUuid);
-        setTurns((prev) =>
+        setAdopted(result.conversationUuid);
+        setLiveTurns((prev) =>
           prev.map((t) =>
             t.id === id
               ? {
@@ -157,7 +182,7 @@ export default function ChatScreen() {
           ),
         );
       } catch (e: any) {
-        setTurns((prev) =>
+        setLiveTurns((prev) =>
           prev.map((t) =>
             t.id === id ? { ...t, error: e.message ?? 'Could not reach Yamin' } : t,
           ),
@@ -165,13 +190,33 @@ export default function ChatScreen() {
       }
     } finally {
       setSending(false);
+      // This turn is now part of the conversation's server-side history, and
+      // a brand-new chat has just appeared in the list — both the sidebar's
+      // recent chats and the /chats screen are showing stale counts.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chatsAll });
+      // A `remembered` turn ran the whole note pipeline server-side, so the
+      // feed and the memory it writes to are stale too.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.notes });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.entities });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reminders });
     }
   };
 
+  /**
+   * Speaking a question, which this screen simply could not do before — the mic
+   * lived only on the home feed. The transcript is asked immediately rather than
+   * dropped into the box to edit: it is already a finished sentence, and making
+   * the user confirm it is a second step for nothing.
+   */
+  const dictation = useVoiceDictation({
+    token: token ?? '',
+    onText: (text) => void ask(text),
+  });
+
   const startFresh = () => {
-    setTurns([]);
-    setConversationUuid(null);
-    // Drop the `c` param so a reload doesn't resurrect the old thread.
+    // Dropping the `c` param is the whole operation: it disables the history
+    // query and trips the effect above, which clears the live turns. It also
+    // stops a reload resurrecting the old thread.
     router.setParams({ c: undefined });
   };
 
@@ -179,7 +224,12 @@ export default function ChatScreen() {
   if (!token) return <Redirect href="/" />;
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: colors.canvas }]}>
+    // No bottom edge — the input bar below owns the bottom inset. See
+    // useKeyboardInset.
+    <SafeAreaView
+      edges={['top', 'left', 'right']}
+      style={[styles.root, { backgroundColor: colors.canvas }]}
+    >
       <View style={[styles.header, { borderBottomColor: colors.borderSubtle }]}>
         <Pressable
           onPress={() => router.back()}
@@ -263,54 +313,125 @@ export default function ChatScreen() {
         </View>
       </ScrollView>
 
-      {/* paddingBottom instead of KeyboardAvoidingView — see useKeyboardOffset. */}
-      <View
-        style={[
-          styles.inputBar,
-          {
-            borderTopColor: colors.borderSubtle,
-            paddingHorizontal: pad,
-            paddingTop: pad,
-            paddingBottom: pad + keyboardOffset,
-          },
-        ]}
-      >
-        <View style={[styles.column, styles.inputRow, { width: columnWidth }]}>
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            onSubmitEditing={() => ask(draft)}
-            placeholder="Ask about anything you've told Yamin…"
-            placeholderTextColor={colors.textSubtle}
-            accessibilityLabel="Your question"
-            style={[
-              styles.input,
-              type.body,
-              {
-                color: colors.text,
-                backgroundColor: colors.surfaceSunken,
-                borderColor: colors.border,
-              },
-            ]}
-            {...({ outlineStyle: 'none' } as object)}
-          />
-          <Pressable
-            onPress={() => ask(draft)}
-            disabled={busy || !draft.trim()}
-            accessibilityRole="button"
-            accessibilityLabel="Send question"
-            style={[
-              styles.send,
-              {
-                backgroundColor: colors.brand,
-                opacity: busy || !draft.trim() ? 0.4 : 1,
-              },
-            ]}
+      {/* Sticks to the real IME insets rather than inferring a lift from window
+          geometry that edge-to-edge no longer changes — see useKeyboardInset. */}
+      <KeyboardStickyView offset={{ closed: 0, opened: pad }}>
+        <View
+          style={[
+            styles.inputBar,
+            {
+              borderTopColor: colors.borderSubtle,
+              // Opaque so the thread does not show through the bar once the
+              // keyboard lifts it off the bottom — same note as index.tsx.
+              backgroundColor: colors.canvas,
+              paddingHorizontal: pad,
+              paddingTop: pad,
+              paddingBottom: pad + bottomInset,
+            },
+          ]}
+        >
+          <View
+            style={[styles.column, styles.inputRow, { width: columnWidth }]}
           >
-            <Feather name="arrow-up" size={18} color={colors.onBrand} />
-          </Pressable>
+            {dictation.isRecording || dictation.transcribing ? (
+              <View style={styles.recRow}>
+                <Animated.View
+                  style={[
+                    styles.recDot,
+                    { backgroundColor: colors.danger },
+                    dictation.pulseStyle,
+                  ]}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[type.bodyMedium, styles.recLabel, { color: colors.danger }]}
+                >
+                  {dictation.transcribing
+                    ? 'Transcribing…'
+                    : `${formatDuration(dictation.durationMs)} — recording`}
+                </Text>
+              </View>
+            ) : (
+              <TextInput
+                value={draft}
+                onChangeText={setDraft}
+                onSubmitEditing={() => ask(draft)}
+                placeholder="Ask about anything you've told Yamin…"
+                placeholderTextColor={colors.textSubtle}
+                accessibilityLabel="Your question"
+                style={[
+                  styles.input,
+                  type.body,
+                  {
+                    color: colors.text,
+                    backgroundColor: colors.surfaceSunken,
+                    borderColor: colors.border,
+                  },
+                ]}
+                {...({ outlineStyle: 'none' } as object)}
+              />
+            )}
+
+            {/*
+              The mic is shown until there is something typed, at which point it
+              becomes the send button — one control, whichever input the user
+              actually reached for. Recording gets explicit discard/send, because
+              there is no finger held down here to release.
+            */}
+            {dictation.isRecording ? (
+              <>
+                <Pressable
+                  onPress={() => dictation.finishRecording(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Discard recording"
+                  style={[styles.send, { backgroundColor: colors.surfaceSunken }]}
+                >
+                  <Feather name="x" size={18} color={colors.textMuted} />
+                </Pressable>
+                <Pressable
+                  onPress={() => dictation.finishRecording(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send recording"
+                  style={[styles.send, { backgroundColor: colors.brand }]}
+                >
+                  <Feather name="arrow-up" size={18} color={colors.onBrand} />
+                </Pressable>
+              </>
+            ) : draft.trim() ? (
+              <Pressable
+                onPress={() => ask(draft)}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel="Send question"
+                style={[
+                  styles.send,
+                  { backgroundColor: colors.brand, opacity: busy ? 0.4 : 1 },
+                ]}
+              >
+                <Feather name="arrow-up" size={18} color={colors.onBrand} />
+              </Pressable>
+            ) : (
+              <Animated.View style={dictation.idleStyle}>
+                <Pressable
+                  onPress={dictation.startRecording}
+                  disabled={busy || dictation.transcribing}
+                  accessibilityRole="button"
+                  accessibilityLabel="Ask by voice"
+                  style={[
+                    styles.send,
+                    {
+                      backgroundColor: colors.brand,
+                      opacity: busy || dictation.transcribing ? 0.4 : 1,
+                    },
+                  ]}
+                >
+                  <Feather name="mic" size={18} color={colors.onBrand} />
+                </Pressable>
+              </Animated.View>
+            )}
+          </View>
         </View>
-      </View>
+      </KeyboardStickyView>
     </SafeAreaView>
   );
 }
@@ -388,6 +509,13 @@ function ChatTurn({ turn }: { turn: Turn }) {
   );
 }
 
+function formatDuration(ms: number) {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
 /** One cited voice note: [n] matches the [n] citations inside the answer. */
 function SourceRow({ index, source }: { index: number; source: AskSource }) {
   const { colors } = useTokens();
@@ -431,12 +559,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
   },
-  turn: { gap: space.sm },
+  // Explicitly full-width — see the same note on `group` in note-card.tsx. The
+  // bubbles are auto-width boxes bounded by maxWidth, and an auto width with no
+  // definite parent to resolve against collapses to min-content on Android.
+  turn: { width: '100%', gap: space.sm },
   // maxWidth comes from useLayout() in pixels, not '%'.
+  //
+  // No `flexShrink`/`minWidth: 0` here, deliberately. Those govern the MAIN
+  // axis, which in this column is vertical, so they bought nothing — but they
+  // also told Yoga the box may shrink to zero width, and on Android that is
+  // taken literally: the bubble collapses to min-content and the text renders
+  // one character per line, stacked downwards. alignSelf plus a pixel maxWidth
+  // is the whole job.
   question: {
     alignSelf: 'flex-end',
-    flexShrink: 1,
-    minWidth: 0,
     borderRadius: radius.lg,
     borderBottomRightRadius: radius.sm,
     paddingHorizontal: space.lg,
@@ -444,8 +580,6 @@ const styles = StyleSheet.create({
   },
   answer: {
     alignSelf: 'flex-start',
-    flexShrink: 1,
-    minWidth: 0,
     borderWidth: 1,
     borderRadius: radius.lg,
     borderTopLeftRadius: radius.sm,
@@ -476,6 +610,10 @@ const styles = StyleSheet.create({
   },
   inputBar: { borderTopWidth: 1, padding: space.lg },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  recRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1 },
+  // minWidth:0 lets the label truncate instead of shoving the buttons off the bar.
+  recLabel: { flexShrink: 1, minWidth: 0 },
+  recDot: { width: 10, height: 10, borderRadius: 5 },
   input: {
     flex: 1,
     borderWidth: 1,

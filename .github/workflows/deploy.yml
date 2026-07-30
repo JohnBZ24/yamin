@@ -110,6 +110,20 @@ jobs:
             sleep 5
           done
 
+          echo "==> Verifying audio storage is configured"
+          # Voice notes are the product. Without AWS credentials the API still
+          # boots, still passes every check above, and still answers 200 — and
+          # then hands every phone an unusable upload URL. That shipped once and
+          # took a debugging session to find, because nothing on the server said
+          # anything was wrong. Now the deploy says it.
+          if ! curl -fsS http://127.0.0.1:3000/api/v1/health/ready \
+               | grep -q '"storage":{"status":"up"}'; then
+            echo "S3 is not configured — voice notes would fail to store audio."
+            echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in $APP_DIR/.env, then redeploy."
+            exit 1
+          fi
+          echo "Audio storage OK."
+
           echo "==> Pruning old images"
           docker image prune -f
 

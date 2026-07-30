@@ -75,7 +75,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       // after 4.5s is a reminder you miss.
       void presentReminder('Yamin reminder', data.title).then((shown) => {
         if (!shown) {
-          toast(`⏰ Reminder: ${data.title}`, 'success', { sticky: true });
+          toast(`Reminder: ${data.title}`, 'success', { sticky: true });
         }
       });
     });

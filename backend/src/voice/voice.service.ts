@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -33,6 +34,12 @@ export class VoiceService {
   private readonly logger = new Logger(VoiceService.name);
   private s3Client: S3Client | null = null;
   private readonly s3Endpoint: string | undefined;
+  private readonly isProduction: boolean;
+
+  /** True once S3 credentials are present, so the storage check can say so. */
+  get storageConfigured(): boolean {
+    return this.s3Client !== null;
+  }
 
   constructor(
     private readonly configService: ConfigService,
@@ -40,9 +47,19 @@ export class VoiceService {
     @Inject(STT_PROVIDER) private readonly sttProvider: SttProvider,
     @InjectQueue('voice-processing') private readonly voiceQueue: Queue,
   ) {
-    const accessKeyId = this.configService.get<string>('s3.accessKeyId');
-    const secretAccessKey =
-      this.configService.get<string>('s3.secretAccessKey');
+    this.isProduction =
+      this.configService.get<string>('app.nodeEnv') === 'production';
+
+    // Trimmed, and empty-checked rather than truthy-checked on the raw value:
+    // `AWS_ACCESS_KEY_ID=` in a .env yields '', which is falsy — but
+    // `AWS_ACCESS_KEY_ID=" "` yields ' ', which is not, and would build a
+    // client that 403s on every call instead of failing the check here.
+    const accessKeyId = this.configService
+      .get<string>('s3.accessKeyId')
+      ?.trim();
+    const secretAccessKey = this.configService
+      .get<string>('s3.secretAccessKey')
+      ?.trim();
     const region = this.configService.get<string>('s3.region') || 'us-east-1';
 
     // Normalized once, used everywhere. A .env line like
@@ -75,18 +92,36 @@ export class VoiceService {
         requestChecksumCalculation: 'WHEN_REQUIRED',
         responseChecksumValidation: 'WHEN_REQUIRED',
       });
+    } else if (this.isProduction) {
+      // Loud, because this is exactly the failure that shipped once: the server
+      // had no AWS keys, generatePresignedUrl quietly returned
+      // `http://localhost:3000/mock-upload/...`, and every phone dutifully PUT
+      // its recording at itself. The device-side symptom ("storage problem")
+      // pointed nowhere near the actual cause, which was one missing .env line.
+      this.logger.error(
+        'AWS S3 credentials are missing in production — voice notes cannot store audio. ' +
+          'Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the server .env and restart. ' +
+          'Presign requests will now fail with 503 instead of returning unusable mock URLs.',
+      );
     } else {
       this.logger.warn(
-        'AWS S3 credentials not fully configured. Presigned URLs will fallback to mock signatures.',
+        'AWS S3 credentials not configured — presigned URLs fall back to local mock URLs. ' +
+          'This is fine for development; it would be a broken voice feature in production.',
       );
     }
   }
 
   /**
-   * The signed Content-Type must match what the client sends on the PUT, or S3
-   * rejects the upload with a signature mismatch. It used to be hardcoded
-   * 'audio/mpeg' regardless of extension; now it's derived and returned so the
-   * client can echo it instead of guessing.
+   * Derived from the extension, and returned to the client so it can echo it on
+   * the PUT rather than guess. It used to be hardcoded 'audio/mpeg' regardless
+   * of the real container.
+   *
+   * Not a signature constraint, despite how it looks: `getSignedUrl` puts only
+   * `host` in X-Amz-SignedHeaders, so S3 does not verify Content-Type and will
+   * accept a PUT that sends the wrong one (measured, not assumed). What it does
+   * decide is the Content-Type the object is STORED with — and the app plays
+   * notes back straight from that URL, so getting it wrong breaks playback on
+   * an upload that otherwise looks completely successful.
    */
   private contentTypeFor(extension: string): string {
     const types: Record<string, string> = {
@@ -124,6 +159,17 @@ export class VoiceService {
     let uploadUrl = '';
     let downloadUrl = '';
 
+    // A mock URL is a development convenience that becomes a trap the moment it
+    // leaves this machine: `localhost` on a phone is the phone, so the upload
+    // fails with a network error that looks like anything but a server
+    // misconfiguration. Better to say plainly that storage is unavailable —
+    // the client can then keep the transcript and drop only the audio.
+    if (!this.s3Client && this.isProduction) {
+      throw new ServiceUnavailableException(
+        'Audio storage is not configured on the server',
+      );
+    }
+
     if (this.s3Client) {
       const command = new PutObjectCommand({
         Bucket: bucket,
@@ -160,6 +206,8 @@ export class VoiceService {
       rawText: '',
       status: 'awaiting_upload',
       summary: null,
+      // Arrives with the submit — the recording is still in progress here.
+      peaks: null,
       embedding: null,
       userId,
     });
@@ -242,6 +290,8 @@ export class VoiceService {
           rawText: dto.rawText || '',
           status: 'pending',
           summary: null,
+          // Typed notes have no audio, so no envelope to draw.
+          peaks: dto.peaks ?? null,
           embedding: null,
           userId,
         },
@@ -255,7 +305,13 @@ export class VoiceService {
       transcript =
         (await this.voiceRepository.update(
           transcript.id,
-          { rawText: dto.rawText || '', status: 'pending' },
+          {
+            rawText: dto.rawText || '',
+            status: 'pending',
+            // Spread so a submit without peaks leaves an existing envelope
+            // alone rather than nulling it.
+            ...(dto.peaks ? { peaks: dto.peaks } : {}),
+          },
           queryRunner,
         )) ?? transcript;
     }

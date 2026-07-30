@@ -948,6 +948,32 @@ export class MemoryService {
     }));
   }
 
+  /**
+   * Delete a conversation and every turn in it.
+   *
+   * Only the chat transcript goes. Anything the conversation caused — a note it
+   * remembered, an entity it created, a reminder it scheduled — is deliberately
+   * left alone: those are the user's memory, not the record of the exchange that
+   * produced them, and deleting a chat to tidy the list must not silently drop
+   * what Yamin learned in it.
+   */
+  async deleteChat(
+    userId: number,
+    conversationUuid: string,
+    queryRunner?: QueryRunner,
+  ) {
+    const removed = await this.chatMessageRepository.deleteConversation(
+      { userId, conversationUuid },
+      queryRunner,
+    );
+    if (removed === 0) {
+      // Scoped by userId in the DELETE — absent and someone-else's look the
+      // same, deliberately.
+      throw new NotFoundException('Conversation not found');
+    }
+    return { conversationUuid, deletedTurns: removed };
+  }
+
   /** Reminders Yamin has set for this user: soonest upcoming first, then history. */
   async listReminders(userId: number, limit = 20, queryRunner?: QueryRunner) {
     return this.reminderRepository.listForUser({ userId, limit }, queryRunner);

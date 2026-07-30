@@ -17,11 +17,20 @@ export type HealthReport = {
 export class HealthService implements OnModuleDestroy {
   private readonly logger = new Logger(HealthService.name);
   private readonly redis: Redis;
+  private readonly storageConfigured: boolean;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     configService: ConfigService<AllConfigType>,
   ) {
+    // Config presence, deliberately not a live S3 call: this value gates a
+    // deploy-time assertion, and a check that can flake on an AWS blip would
+    // eventually be ignored. Missing credentials never flake.
+    this.storageConfigured = Boolean(
+      configService.get('s3.accessKeyId', { infer: true })?.trim() &&
+        configService.get('s3.secretAccessKey', { infer: true })?.trim(),
+    );
+
     const redis = configService.getOrThrow('redis', { infer: true });
     this.redis = new Redis({
       host: redis.host,
@@ -54,9 +63,17 @@ export class HealthService implements OnModuleDestroy {
     info.database = await this.check(() => this.dataSource.query('SELECT 1'));
     info.redis = await this.check(() => this.redis.ping());
 
-    const status = Object.values(info).every((d) => d.status === 'up')
-      ? 'ok'
-      : 'error';
+    // Reported, but deliberately NOT part of the overall status. Without S3 the
+    // API still serves typed notes, search and history perfectly well, so
+    // pulling the instance out of the load balancer over it would turn a
+    // degraded feature into an outage. The deploy asserts on this field
+    // directly instead — see .github/workflows/deploy.yml.
+    info.storage = this.storageConfigured
+      ? { status: 'up' }
+      : { status: 'down', error: 'S3 credentials are not configured' };
+
+    const required = [info.database, info.redis];
+    const status = required.every((d) => d.status === 'up') ? 'ok' : 'error';
 
     return { status, info };
   }

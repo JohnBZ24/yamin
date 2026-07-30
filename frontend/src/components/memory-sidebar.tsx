@@ -2,9 +2,17 @@ import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
-import { api, ConversationSummary, Entity, Reminder } from '../lib/api';
+import { ConversationSummary, Entity, Reminder } from '../lib/api';
+import {
+  useChats,
+  useDeleteChat,
+  useEntities,
+  useEntityDetail,
+  useReminders,
+} from '../lib/queries';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
 
@@ -30,58 +38,47 @@ const TYPE_ICON: Record<string, keyof typeof Feather.glyphMap> = {
  */
 export function MemorySidebar({
   token,
-  refreshKey,
   onClose,
   onSignOut,
+  selectedId,
+  onSelectEntity,
 }: {
   token: string;
-  refreshKey: number;
   onClose?: () => void;
   onSignOut?: () => void;
+  /**
+   * Supplying these lifts entity selection to the parent, which is what the
+   * wide layout does so the detail can be shown in its own column. Left out,
+   * the sidebar owns the selection and expands the row inline — the only
+   * option when there is no room for a third pane.
+   */
+  selectedId?: number | null;
+  onSelectEntity?: (id: number | null) => void;
 }) {
   const { colors } = useTokens();
   const router = useRouter();
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [recentChats, setRecentChats] = useState<ConversationSummary[]>([]);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<Awaited<ReturnType<typeof api.entity>> | null>(
-    null,
-  );
+  const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .entities(token)
-      .then((list) => !cancelled && setEntities(list))
-      .catch(() => {});
-    api
-      .chats(token, 4)
-      .then((list) => !cancelled && setRecentChats(list))
-      .catch(() => {});
-    api
-      .reminders(token, 4)
-      .then((list) => !cancelled && setReminders(list))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token, refreshKey]);
+  const controlled = onSelectEntity !== undefined;
+  const [ownSelected, setOwnSelected] = useState<number | null>(null);
+  const selected = controlled ? (selectedId ?? null) : ownSelected;
+  const setSelected = controlled ? onSelectEntity : setOwnSelected;
 
-  useEffect(() => {
-    if (selected == null) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    api
-      .entity(token, selected)
-      .then((d) => !cancelled && setDetail(d))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token, selected]);
+  /**
+   * No refreshKey prop any more. These used to be three fetches in an effect
+   * keyed on a counter the feed screen incremented after every processed or
+   * deleted note, threaded down through two components for the sole purpose of
+   * making this effect run again. Invalidating the keys does the same job from
+   * wherever the change actually happened.
+   */
+  const { data: entities = [] } = useEntities(token);
+  const { data: recentChats = [] } = useChats(token, 4);
+  const { data: reminders = [] } = useReminders(token, 4);
+  const deleteChat = useDeleteChat(token);
+  // Nothing is fetched while nothing is selected; expanding a row is what
+  // enables this. When the parent owns selection it is also rendering the
+  // detail itself, so there is nothing to fetch for here.
+  const { data: detail } = useEntityDetail(token, controlled ? null : selected);
 
   const renderEntity = useCallback(
     ({ item: e }: { item: Entity }) => {
@@ -154,7 +151,10 @@ export function MemorySidebar({
         </View>
       );
     },
-    [selected, detail, colors],
+    // `detail` is undefined whenever the parent owns selection, so the inline
+    // accordion below simply does not render in that mode — the detail column
+    // is showing it instead.
+    [selected, setSelected, detail, colors],
   );
 
   const navigate = (path: '/chat' | '/graph') => {
@@ -256,37 +256,18 @@ export function MemorySidebar({
                   </Pressable>
                 </View>
                 {recentChats.map((chat) => (
-                  <Pressable
+                  <RecentChatRow
                     key={chat.conversationUuid}
-                    onPress={() => {
+                    chat={chat}
+                    onOpen={() => {
                       onClose?.();
                       router.push({
                         pathname: '/chat',
                         params: { c: chat.conversationUuid },
                       });
                     }}
-                    accessibilityRole="button"
-                    style={({ pressed }) => [
-                      styles.chatRow,
-                      {
-                        backgroundColor: pressed
-                          ? colors.surfaceHover
-                          : 'transparent',
-                      },
-                    ]}
-                  >
-                    <Feather
-                      name="message-circle"
-                      size={13}
-                      color={colors.textSubtle}
-                    />
-                    <Text
-                      numberOfLines={1}
-                      style={[type.small, { color: colors.textMuted, flex: 1 }]}
-                    >
-                      {chat.title}
-                    </Text>
-                  </Pressable>
+                    onDelete={() => deleteChat.mutate(chat.conversationUuid)}
+                  />
                 ))}
               </View>
             )}
@@ -297,7 +278,7 @@ export function MemorySidebar({
         }
         ListEmptyComponent={
           <Text style={[type.small, { color: colors.textSubtle }]}>
-            Nothing yet. Tell Yamin about someone and they'll appear here.
+            Nothing yet. Tell Yamin about someone and they&apos;ll appear here.
           </Text>
         }
       />
@@ -312,6 +293,15 @@ export function MemorySidebar({
             {
               borderTopColor: colors.borderSubtle,
               backgroundColor: pressed ? colors.surfaceHover : 'transparent',
+              /**
+               * Clear of the system navigation area. This sat flush against the
+               * bottom of the screen, which on a Samsung with gesture navigation
+               * is the home-swipe strip — so aiming for "Sign out" triggered the
+               * home gesture instead. The inset is the height the OS reserves
+               * there, and `space.md` keeps the tap target off the very edge even
+               * on a device that reports no inset at all.
+               */
+              paddingBottom: insets.bottom + space.md,
             },
           ]}
         >
@@ -320,6 +310,70 @@ export function MemorySidebar({
         </Pressable>
       )}
     </View>
+  );
+}
+
+/**
+ * A recent chat, with a two-tap delete.
+ *
+ * Two taps rather than a confirm dialog: `Alert.alert` is a no-op in
+ * react-native-web, so a dialog would leave the web build deleting with no
+ * confirmation at all. First tap arms and turns red, second deletes, and it
+ * disarms itself if the user moves on — same pattern as note-card.tsx.
+ */
+function RecentChatRow({
+  chat,
+  onOpen,
+  onDelete,
+}: {
+  chat: ConversationSummary;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const { colors } = useTokens();
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  return (
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      style={({ pressed }) => [
+        styles.chatRow,
+        { backgroundColor: pressed ? colors.surfaceHover : 'transparent' },
+      ]}
+    >
+      <Feather name="message-circle" size={13} color={colors.textSubtle} />
+      <Text
+        numberOfLines={1}
+        style={[type.small, styles.chatTitle, { color: colors.textMuted }]}
+      >
+        {chat.title}
+      </Text>
+      <Pressable
+        // Stops the row's own press from firing, which would open the very chat
+        // the user is trying to delete.
+        onPress={(event) => {
+          event.stopPropagation();
+          if (armed) onDelete();
+          else setArmed(true);
+        }}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel={armed ? 'Confirm delete chat' : 'Delete chat'}
+      >
+        <Feather
+          name={armed ? 'x-circle' : 'trash-2'}
+          size={13}
+          color={armed ? colors.dangerText : colors.textSubtle}
+        />
+      </Pressable>
+    </Pressable>
   );
 }
 
@@ -393,7 +447,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.sm,
     paddingHorizontal: space.lg,
-    paddingVertical: space.lg,
+    // paddingBottom is supplied per-render from the safe-area inset.
+    paddingTop: space.lg,
     borderTopWidth: 1,
   },
   list: { padding: space.md, gap: space.xs },
@@ -413,6 +468,9 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     borderRadius: radius.sm,
   },
+  // minWidth:0 lets a long title truncate instead of pushing the delete icon
+  // off the row.
+  chatTitle: { flex: 1, minWidth: 0 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 
 import { VoiceService } from './voice.service';
 import { VoiceTranscript } from './domain/voice-transcript';
@@ -91,6 +91,39 @@ describe('VoiceService', () => {
 
       expect(wav.contentType).toBe('audio/wav');
       expect(m4a.contentType).toBe('audio/mp4');
+    });
+
+    /**
+     * The production incident this guards against: the server was deployed
+     * without AWS credentials, so every presign happily returned
+     * `http://localhost:3000/mock-upload/...`. On a phone `localhost` is the
+     * phone, so each upload failed with a network error that implicated the
+     * device, the network, and the S3 bucket — everything except the one
+     * missing .env line that actually caused it.
+     *
+     * A mock URL is only ever useful on the machine that minted it. In
+     * production it must be an honest 503 instead.
+     */
+    it('refuses to hand out mock upload URLs in production', async () => {
+      const prodConfig = {
+        get: jest.fn((key: string) =>
+          key === 'app.nodeEnv' ? 'production' : undefined,
+        ),
+      };
+      const prodService = new VoiceService(
+        prodConfig as any,
+        repo as any,
+        { transcribe: jest.fn() } as any,
+        queue as any,
+      );
+
+      await expect(
+        prodService.generatePresignedUrl({ fileExtension: '.m4a' }, USER),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      // And it must not leave an orphaned awaiting_upload row behind for a
+      // note whose audio can never arrive.
+      expect(repo.create).not.toHaveBeenCalled();
     });
   });
 

@@ -151,6 +151,12 @@ export type VoiceNote = {
   status: 'pending' | 'processed' | 'failed' | string;
   summary: string | null;
   createdAt: string;
+  /**
+   * Amplitude envelope of the recording, 0–100 per bar, captured on the device
+   * from expo-audio metering. Null/absent for typed notes and for anything
+   * recorded before this shipped — the player falls back to a flat shape.
+   */
+  peaks?: number[] | null;
   nodes?: GraphNode[];
   relations?: unknown[];
 };
@@ -314,14 +320,23 @@ export const api = {
       body: JSON.stringify({ fileExtension }),
     }),
 
-  submit: (token: string, fileUuid: string, rawText: string) =>
+  submit: (token: string, fileUuid: string, rawText: string, peaks?: number[]) =>
     request<VoiceNote>('/voice/processing', {
       method: 'POST',
       token,
       // The server runs in UTC and has no other way to know what "at 2:43"
       // means in wall-clock terms — without this, a spoken reminder time can
       // only be guessed at, or silently dropped.
-      body: JSON.stringify({ fileUuid, rawText, timezone: deviceTimezone() }),
+      //
+      // `peaks` is omitted rather than sent as undefined for a typed note: the
+      // DTO validates it when present, and an explicit null would clear an
+      // envelope already stored against this uuid.
+      body: JSON.stringify({
+        fileUuid,
+        rawText,
+        timezone: deviceTimezone(),
+        ...(peaks?.length ? { peaks } : {}),
+      }),
     }),
 
   deleteNote: (token: string, fileUuid: string) =>
@@ -375,6 +390,17 @@ export const api = {
 
   chat: (token: string, conversationUuid: string) =>
     request<ChatTurnRecord[]>(`/memory/chats/${conversationUuid}`, { token }),
+
+  /**
+   * Removes the transcript only. Notes the conversation remembered, entities it
+   * created and reminders it set are kept — deleting a chat tidies the list, it
+   * does not erase what Yamin learned.
+   */
+  deleteChat: (token: string, conversationUuid: string) =>
+    request<{ conversationUuid: string; deletedTurns: number }>(
+      `/memory/chats/${conversationUuid}`,
+      { method: 'DELETE', token },
+    ),
 
   /**
    * Registers this device for reminder notifications. Without it a reminder
@@ -436,19 +462,38 @@ export const api = {
 };
 
 /**
+ * A file part this app can actually send.
+ *
+ * On native it is NOT React Native's classic `{uri, name, type}` shape. Expo
+ * SDK 57 replaces the global `fetch` with expo/fetch, whose multipart encoder
+ * states outright that "`uri` is not supported for React Native's FormData" —
+ * it accepts a string, a real Blob, or any object exposing `bytes()`, and reads
+ * `.name`/`.type` for the part headers. Passing the classic shape throws
+ * "Unsupported FormDataPart implementation" and no audio ever leaves the phone.
+ */
+export type UploadPart = {
+  bytes: () => Promise<Uint8Array>;
+  name: string;
+  type: string;
+};
+
+/**
  * Multipart, so it can't go through request() — that sets a JSON content-type.
  * Letting fetch set the boundary itself is required; setting Content-Type by
  * hand omits the boundary and the server can't parse the body.
  */
 export async function transcribe(
   token: string,
-  file: Blob | { uri: string; name: string; type: string },
+  file: Blob | UploadPart,
   filename: string,
 ): Promise<{ text: string }> {
   const form = new FormData();
   if (file instanceof Blob) {
+    // Web: the browser's own FormData, where the third argument sets the filename.
     form.append('file', file, filename);
   } else {
+    // Native: expo/fetch reads the filename off `.name`, not off a third
+    // argument, which is why the part carries its own name.
     form.append('file', file as unknown as Blob);
   }
 

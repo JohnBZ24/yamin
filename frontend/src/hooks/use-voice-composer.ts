@@ -7,7 +7,6 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
-import { File, UploadType } from 'expo-file-system';
 import {
   useAnimatedStyle,
   useSharedValue,
@@ -17,9 +16,66 @@ import {
 
 import { useToast } from '../components/toast';
 import { api, transcribe, type Intent } from '../lib/api';
+import {
+  hapticCancel,
+  hapticLock,
+  hapticRecordStart,
+  hapticSend,
+} from '../lib/haptics';
+import {
+  readRecording,
+  transcribePart,
+  type Recording,
+} from '../lib/recording';
 import { randomUuid } from '../lib/uuid';
+import {
+  IDLE_SCALE,
+  METER_INTERVAL_MS,
+  MIN_DURATION_MS,
+  PEAK_SCALE,
+  meterToLevel,
+} from './voice-metering';
 
 export type ComposerStage = 'idle' | 'reading' | 'uploading' | 'transcribing' | 'thinking';
+
+/**
+ * Bars in the stored waveform. Matches what the bubble draws — sending more
+ * would be storing detail nobody can see, and the server caps it at 64 anyway.
+ */
+const PEAK_BUCKETS = 40;
+
+/**
+ * Squash however many level samples were taken into a fixed-length envelope.
+ *
+ * A 3-second note yields ~30 samples and a 3-minute one ~1800, but the bubble
+ * is the same size either way, so the recording is divided into PEAK_BUCKETS
+ * slices and each slice keeps its LOUDEST sample. Averaging would flatten
+ * speech into a uniform bar of mush — the peak is what gives a waveform its
+ * shape.
+ *
+ * Returns 0–100 integers: two significant digits is well beyond what a 2px-wide
+ * bar can express, and integers keep the JSON small.
+ */
+function toEnvelope(samples: number[]): number[] | undefined {
+  if (samples.length === 0) return undefined;
+
+  const buckets = Math.min(PEAK_BUCKETS, samples.length);
+  const envelope: number[] = [];
+
+  for (let i = 0; i < buckets; i++) {
+    const start = Math.floor((i * samples.length) / buckets);
+    const end = Math.max(start + 1, Math.floor(((i + 1) * samples.length) / buckets));
+    let loudest = 0;
+    for (let j = start; j < end; j++) {
+      if (samples[j] > loudest) loudest = samples[j];
+    }
+    envelope.push(Math.round(loudest * 100));
+  }
+
+  // All-silent means metering never reported anything usable (an emulator with
+  // no mic input, say). Sending a flat line would claim to be real data.
+  return envelope.some((v) => v > 0) ? envelope : undefined;
+}
 
 /**
  * Hold-to-talk is natural under a thumb; under a mouse it's hostile — slip off
@@ -38,84 +94,66 @@ export const HOLD_TO_RECORD =
     window.matchMedia('(pointer: coarse)').matches);
 
 /**
- * Below this the recording is a container header with no usable frames — the
- * STT provider rejects it outright, so discard locally with a clear message
- * instead of a round-trip that can only fail.
- */
-const MIN_DURATION_MS = 400;
-
-/** The upload/transcribe path needs a real extension; the recorder tells us the container per platform. */
-function extensionFor(uri: string, blobType: string): string {
-  if (Platform.OS !== 'web') {
-    const match = /\.[A-Za-z0-9]+$/.exec(uri);
-    return match ? match[0].toLowerCase() : '.m4a';
-  }
-  // Web recordings come out of MediaRecorder: webm/opus on Chrome, mp4 on Safari.
-  if (blobType.includes('mp4') || blobType.includes('aac')) return '.m4a';
-  if (blobType.includes('ogg')) return '.ogg';
-  if (blobType.includes('mpeg')) return '.mp3';
-  if (blobType.includes('wav')) return '.wav';
-  return '.webm';
-}
-
-/**
- * Mirrors contentTypeFor() in the backend's VoiceService. On native the file's
- * own reported mime type is preferred; this is the fallback for when the OS
- * gives back an empty string, which is what made the multipart part arrive
- * type-less and unparseable.
- */
-const MIME_BY_EXTENSION: Record<string, string> = {
-  '.m4a': 'audio/mp4',
-  '.mp4': 'audio/mp4',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.webm': 'audio/webm',
-  '.ogg': 'audio/ogg',
-  '.aac': 'audio/aac',
-};
-
-function mimeForExtension(extension: string): string {
-  return MIME_BY_EXTENSION[extension.toLowerCase()] ?? 'audio/mp4';
-}
-
-/**
- * The recording, in whatever form this platform can actually hand to the
- * network layer.
+ * Presign, then PUT the recording straight to S3.
  *
- * This split exists because of a hard React Native limitation: RN's Blob cannot
- * be constructed from bytes, so `await (await fetch(fileUri)).blob()` — the web
- * idiom — throws "Creating blobs from 'ArrayBuffer' and 'ArrayBufferView' is
- * not supported" on a device. Every voice note failed there, before it was even
- * transcribed. Native never needs a Blob: FormData takes the {uri,name,type}
- * shape, and expo-file-system streams the file straight to S3.
+ * Throws with a message that names what actually went wrong, because these
+ * failures are otherwise indistinguishable from the outside and each needs a
+ * different fix: a 503 here means the server has no AWS credentials, a 403
+ * SignatureDoesNotMatch means the signed and sent Content-Type disagree, and a
+ * network error means the request never reached S3 at all.
  */
-type Recording =
-  | { platform: 'web'; blob: Blob; extension: string; mimeType: string }
-  | { platform: 'native'; file: File; extension: string; mimeType: string };
+async function uploadAudio(
+  token: string,
+  recording: Recording,
+): Promise<{ audioUrl: string | null; fileUuid?: string }> {
+  const { fileUuid, uploadUrl, downloadUrl, contentType } = await api.presign(
+    token,
+    recording.extension,
+  );
 
-async function readRecording(uri: string): Promise<Recording> {
-  if (Platform.OS === 'web') {
-    const blob = await (await fetch(uri)).blob();
-    const extension = extensionFor(uri, blob.type ?? '');
-    return {
-      platform: 'web',
-      blob,
-      extension,
-      mimeType: blob.type || mimeForExtension(extension),
-    };
+  // Echo the Content-Type the backend chose rather than guessing one. S3 does
+  // not verify it (only `host` is signed), but it is what the object gets
+  // stored as — and notes are played back straight from that URL, so a wrong
+  // type breaks playback on an upload that reported success.
+  //
+  // Native sends the bytes as a Uint8Array, NOT the File itself: expo/fetch
+  // normalises a Blob-like body by overwriting Content-Type with the blob's own
+  // `type`, and the recorder's type is not always the one we asked for. A typed
+  // array is passed through untouched, so the header we set is the header sent.
+  let status: number;
+  let detail = '';
+  try {
+    const response = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body:
+        recording.platform === 'web'
+          ? recording.blob
+          : await recording.file.bytes(),
+    });
+    status = response.status;
+    if (status < 200 || status >= 300) {
+      // S3 explains itself in an XML body (SignatureDoesNotMatch, AccessDenied,
+      // …). Throwing away that body leaves only a bare status code, which is
+      // not enough to tell those apart.
+      detail = await response.text().catch(() => '');
+    }
+  } catch (err: any) {
+    // A network-level failure never reached S3 at all. On web that is usually
+    // the bucket refusing the browser's CORS preflight; on a phone there is no
+    // preflight, so say what actually happened instead of blaming CORS.
+    throw new Error(
+      recording.platform === 'web'
+        ? 'the S3 bucket needs a CORS rule allowing PUT'
+        : `could not reach storage (${err?.message ?? err})`,
+    );
+  }
+  if (status < 200 || status >= 300) {
+    const code = /<Code>([^<]+)<\/Code>/.exec(detail)?.[1];
+    throw new Error(`storage rejected it (${status}${code ? ` ${code}` : ''})`);
   }
 
-  const file = new File(uri);
-  if (!file.exists || file.size <= 0) {
-    throw new Error('Recording produced no audio');
-  }
-  const extension = extensionFor(uri, '');
-  return {
-    platform: 'native',
-    file,
-    extension,
-    mimeType: file.type || mimeForExtension(extension),
-  };
+  return { audioUrl: downloadUrl, fileUuid };
 }
 
 /**
@@ -132,6 +170,7 @@ export function useVoiceComposer({
     fileUuid: string;
     rawText: string;
     audioUrl: string | null;
+    peaks?: number[];
   }) => void;
   onAsk: (question: string, intent: 'ask' | 'chitchat') => void;
 }) {
@@ -150,8 +189,16 @@ export function useVoiceComposer({
    */
   const [locked, setLocked] = useState(false);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
+  /**
+   * Metering is what makes the recording indicator show YOUR voice rather than
+   * a canned animation, so it is on from the start and the status is polled
+   * fast enough to look live.
+   */
+  const recorder = useAudioRecorder({
+    ...RecordingPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  });
+  const recorderState = useAudioRecorderState(recorder, METER_INTERVAL_MS);
   const isRecording = recActive || recorderState.isRecording;
 
   // The start is async. A fast release used to find isRecording still false,
@@ -161,6 +208,14 @@ export function useVoiceComposer({
   const finishingRef = useRef(false);
 
   const pulse = useSharedValue(1);
+  const idle = useSharedValue(1);
+
+  /**
+   * Every level sample of the take in progress, collected so the finished note
+   * can carry a waveform that matches it. A ref, not state: this is appended to
+   * ten times a second and nothing renders from it directly.
+   */
+  const samplesRef = useRef<number[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -172,27 +227,68 @@ export function useVoiceComposer({
     })();
   }, []);
 
+  const busy = stage !== 'idle';
+
+  /**
+   * The indicator now tracks the microphone.
+   *
+   * This was `withRepeat(withTiming(1.18, { duration: 700 }), -1, true)` — a
+   * fixed loop that ran at the same rate whether you were mid-sentence or had
+   * already walked away. Driving it from the real level is the difference
+   * between an animation that says "recording" and one that shows the app is
+   * actually hearing you, which is the moment this stops feeling like a form.
+   *
+   * The timing is slightly longer than the poll interval so consecutive
+   * samples blend into a continuous movement instead of stepping.
+   */
+  const metering = recorderState.metering;
   useEffect(() => {
+    if (!isRecording) {
+      pulse.set(withTiming(1, { duration: 200 }));
+      return;
+    }
+    const level = meterToLevel(metering);
+    // The same samples that drive the pulse become the stored waveform, so the
+    // bars on the finished note are literally what the indicator was showing.
+    samplesRef.current.push(level);
     pulse.set(
-      isRecording
-        ? withRepeat(withTiming(1.18, { duration: 700 }), -1, true)
-        : withTiming(1),
+      withTiming(1 + level * (PEAK_SCALE - 1), { duration: METER_INTERVAL_MS * 1.4 }),
     );
-  }, [isRecording, pulse]);
+  }, [isRecording, metering, pulse]);
+
+  /**
+   * Resting breath on the mic button. Signals "listening, ready" without a
+   * label, and stops entirely once there is something real to show — a button
+   * that keeps idling while it uploads is saying the wrong thing.
+   */
+  useEffect(() => {
+    if (isRecording || busy) {
+      idle.set(withTiming(1, { duration: 200 }));
+      return;
+    }
+    idle.set(withRepeat(withTiming(IDLE_SCALE, { duration: 1600 }), -1, true));
+  }, [isRecording, busy, idle]);
 
   const pulseStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pulse.get() }],
   }));
 
-  const busy = stage !== 'idle';
+  const idleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: idle.get() }],
+  }));
 
-  const send = async (rawText: string, audioUrl: string | null, fileUuid?: string) => {
+  const send = async (
+    rawText: string,
+    audioUrl: string | null,
+    fileUuid?: string,
+    peaks?: number[],
+  ) => {
     // Not crypto.randomUUID(): it is secure-context-only and simply missing
     // over plain HTTP, which is how the app is reached from a phone on the LAN.
     const uuid = fileUuid ?? randomUuid();
     setStage('thinking');
-    onOptimistic({ fileUuid: uuid, rawText, audioUrl });
-    await api.submit(token, uuid, rawText);
+    onOptimistic({ fileUuid: uuid, rawText, audioUrl, peaks });
+    await api.submit(token, uuid, rawText, peaks);
     setStage('idle');
   };
 
@@ -211,6 +307,7 @@ export function useVoiceComposer({
   const route = async (
     value: string,
     prepareStore: () => Promise<{ audioUrl: string | null; fileUuid?: string }>,
+    peaks?: number[],
   ) => {
     setStage('reading');
     let intent: Intent = 'remember';
@@ -228,7 +325,7 @@ export function useVoiceComposer({
     }
 
     const { audioUrl, fileUuid } = await prepareStore();
-    await send(value, audioUrl, fileUuid);
+    await send(value, audioUrl, fileUuid, peaks);
   };
 
   const submitText = async (override?: string) => {
@@ -252,6 +349,12 @@ export function useVoiceComposer({
     }
     setRecActive(true);
     setLocked(false);
+    // A fresh envelope per take, or the second note inherits the first's shape.
+    samplesRef.current = [];
+    // Fired on the press, not after prepareToRecordAsync resolves. The whole
+    // value of this is that it lands inside the ~100ms where a press still
+    // feels connected to the finger that made it.
+    hapticRecordStart();
     const starting = (async () => {
       await recorder.prepareToRecordAsync();
       recorder.record();
@@ -269,6 +372,11 @@ export function useVoiceComposer({
   const finishRecording = async (shouldSend: boolean) => {
     if (finishingRef.current) return;
     finishingRef.current = true;
+    // Which step we are on, for the error message. A bare "unsupported data
+    // implementation" toast names no step, so there is no way to tell reading
+    // the file apart from uploading it — and they fail for entirely different
+    // reasons.
+    let step = 'stopping the recorder';
     try {
       try {
         await startPromiseRef.current;
@@ -284,8 +392,16 @@ export function useVoiceComposer({
         (recorder.currentTime ?? 0) * 1000,
       );
 
+      // Snapshotted before the samples can be reset by a following take.
+      const envelope = toEnvelope(samplesRef.current);
+
       await recorder.stop();
       const uri = recorder.uri;
+
+      // After stop(), so the two outcomes feel distinct in the hand: a send
+      // confirms, a discard warns.
+      if (shouldSend) hapticSend();
+      else hapticCancel();
 
       if (!shouldSend) return;
       if (!uri) throw new Error('Recording produced no audio');
@@ -299,20 +415,24 @@ export function useVoiceComposer({
         return;
       }
 
+      step = 'reading the recording';
       const recording = await readRecording(uri);
       const { extension, mimeType } = recording;
+      console.log(
+        `[voice] uri=${uri} platform=${recording.platform} ext=${extension} mime=${mimeType}` +
+          (recording.platform === 'native' ? ` size=${recording.file.size}` : ''),
+      );
 
       // Transcribe FIRST, then decide. Speaking a question is as natural as
       // typing one, and a question is not a memory — uploading its audio to S3
       // would leave an orphaned object and a row nobody wants. The upload now
       // happens only once we know this is something to keep.
       setStage('transcribing');
+      step = 'transcribing';
       const localName = `voice${extension}`;
       const { text: rawText } = await transcribe(
         token,
-        recording.platform === 'web'
-          ? recording.blob
-          : { uri, name: localName, type: mimeType },
+        transcribePart(recording, localName),
         localName,
       );
 
@@ -324,52 +444,31 @@ export function useVoiceComposer({
 
       // Same router as the typed path. The upload lives inside the callback so
       // it runs only when this really is something to keep.
-      await route(rawText, async () => {
-        setStage('uploading');
-        const { fileUuid, uploadUrl, downloadUrl, contentType } =
-          await api.presign(token, extension);
+      step = 'saving the note';
+      await route(
+        rawText,
+        async () => {
+          setStage('uploading');
+          step = 'uploading the audio';
 
-        // Must match the ContentType the backend signed with, or S3 rejects the
-        // PUT with a signature mismatch — so the backend tells us instead of
-        // both sides guessing.
-        let status: number;
-        try {
-          if (recording.platform === 'web') {
-            status = (
-              await fetch(uploadUrl, {
-                method: 'PUT',
-                headers: { 'Content-Type': contentType },
-                body: recording.blob,
-              })
-            ).status;
-          } else {
-            // Streams the file from disk. Deliberately NOT fetch(): putting the
-            // bytes through JS would mean building a Blob, which is exactly
-            // what React Native cannot do.
-            status = (
-              await recording.file.upload(uploadUrl, {
-                httpMethod: 'PUT',
-                uploadType: UploadType.BINARY_CONTENT,
-                headers: { 'Content-Type': contentType },
-              })
-            ).status;
+          // The transcript IS the note; the audio is a recording of it. So a
+          // storage failure must never cost the user what they said — it drops
+          // the attachment and says so, and the note is saved regardless. This
+          // is the difference between "S3 is misconfigured" being an annoyance
+          // and being data loss.
+          try {
+            return await uploadAudio(token, recording);
+          } catch (err: any) {
+            console.log('[voice] audio upload failed, keeping transcript:', err);
+            toast(`Saved without audio — ${err?.message ?? 'upload failed'}`, 'error');
+            return { audioUrl: null };
           }
-        } catch {
-          // A network-level failure here surfaces as a bare "Failed to fetch".
-          // On web the usual culprit is the bucket refusing the browser's CORS
-          // preflight, which never reaches the request itself.
-          throw new Error(
-            'Audio upload failed before reaching storage — check your connection (on web: the S3 bucket needs a CORS rule allowing PUT)',
-          );
-        }
-        if (status < 200 || status >= 300) {
-          throw new Error(`Audio upload was rejected by storage (${status})`);
-        }
-
-        return { audioUrl: downloadUrl, fileUuid };
-      });
+        },
+        envelope,
+      );
     } catch (err: any) {
-      toast(err.message ?? 'Something went wrong', 'error');
+      console.log(`[voice] failed while ${step}:`, err?.message, err);
+      toast(`Voice failed while ${step}: ${err?.message ?? 'unknown error'}`, 'error');
       setStage('idle');
     } finally {
       startPromiseRef.current = null;
@@ -386,13 +485,19 @@ export function useVoiceComposer({
     busy,
     isRecording,
     recorderState,
+    /** Tracks the live microphone level while recording. */
     pulseStyle,
+    /** Resting breath, for the mic button when nothing is happening. */
+    idleStyle,
     submitText,
     startRecording,
     finishRecording,
     /** Hands-free after a swipe up: a finger release no longer ends the take. */
     locked,
-    lockRecording: () => setLocked(true),
+    lockRecording: () => {
+      hapticLock();
+      setLocked(true);
+    },
     cancelRecording: () => finishRecording(false),
   };
 }

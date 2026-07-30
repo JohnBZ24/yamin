@@ -7,6 +7,7 @@
     "@expo-google-fonts/sora": "^0.4.2",
     "@expo/vector-icons": "^15.0.2",
     "@radix-ui/colors": "^3.0.0",
+    "@tanstack/react-query": "^5.101.4",
     "d3-force": "^3.0.0",
     "expo": "~57.0.4",
     "expo-asset": "~57.0.7",
@@ -16,6 +17,7 @@
     "expo-device": "~57.0.1",
     "expo-file-system": "~57.0.0",
     "expo-font": "~57.0.0",
+    "expo-haptics": "~57.0.1",
     "expo-linking": "~57.0.2",
     "expo-notifications": "~57.0.6",
     "expo-router": "~57.0.4",
@@ -28,6 +30,7 @@
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-gesture-handler": "~2.32.0",
+    "react-native-keyboard-controller": "1.21.9",
     "react-native-markdown-display": "^7.0.2",
     "react-native-reanimated": "4.5.0",
     "react-native-safe-area-context": "~5.7.0",
@@ -39,8 +42,12 @@
     "streamdown": "^2.5.0"
   },
   "devDependencies": {
+    "@emnapi/core": "1.11.3",
+    "@emnapi/runtime": "1.11.3",
     "@types/d3-force": "^3.0.10",
     "@types/react": "~19.2.2",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "^57.0.1",
     "typescript": "~6.0.3"
   },
   "scripts": {

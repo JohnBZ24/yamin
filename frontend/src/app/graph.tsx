@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { Redirect, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -9,11 +9,10 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KnowledgeGraph } from '../components/knowledge-graph';
-import { api } from '../lib/api';
+import { useEntityDetail } from '../lib/queries';
 import { useSession } from '../hooks/use-session';
 import { radius, space, type } from '../theme/tokens';
 import { useTokens } from '../theme/use-tokens';
@@ -31,25 +30,11 @@ export default function GraphScreen() {
   const router = useRouter();
   const { ready, token } = useSession();
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<Awaited<ReturnType<typeof api.entity>> | null>(
-    null,
-  );
-
-  useEffect(() => {
-    if (!token || selected == null) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    api
-      .entity(token, selected)
-      .then((d) => !cancelled && setDetail(d))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token, selected]);
+  // Shares a cache entry with the sidebar's expanded row, so tapping the same
+  // entity in both places costs one request.
+  const { data: detail } = useEntityDetail(token, selected);
 
   if (!ready) return null;
   if (!token) return <Redirect href="/" />;
@@ -88,11 +73,27 @@ export default function GraphScreen() {
       </View>
 
       {selected != null && detail && (
-        <Animated.View
-          entering={FadeInDown.springify().damping(20)}
+        // Not animated. The spring entrance ran at the same moment the SVG was
+        // re-rendering the highlight, so the two competed for the JS thread and
+        // the panel visibly stuttered on its way in. Appearing instantly is both
+        // calmer and free.
+        <View
           style={[
             styles.panel,
-            { backgroundColor: colors.surface, borderTopColor: colors.borderSubtle },
+            {
+              backgroundColor: colors.surface,
+              borderTopColor: colors.borderSubtle,
+              /**
+               * Lifted clear of the system navigation area. The panel sat flush
+               * against the bottom of the screen, so on a Samsung with gesture
+               * navigation its lower rows — including the close button — landed
+               * on the home-swipe strip and taps went to the OS instead.
+               */
+              paddingBottom: space.lg + insets.bottom,
+              // Grows with the inset so the extra padding does not eat into the
+              // facts list on a device with a tall gesture bar.
+              maxHeight: 220 + insets.bottom,
+            },
           ]}
         >
           <View style={styles.panelHead}>
@@ -140,7 +141,7 @@ export default function GraphScreen() {
               ))
             )}
           </ScrollView>
-        </Animated.View>
+        </View>
       )}
     </SafeAreaView>
   );
@@ -164,8 +165,9 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderTopWidth: 1,
-    padding: space.lg,
-    maxHeight: 220,
+    // paddingBottom is supplied per-render from the safe-area inset.
+    paddingTop: space.lg,
+    paddingHorizontal: space.lg,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
   },

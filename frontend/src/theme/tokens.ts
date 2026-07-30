@@ -151,5 +151,21 @@ export const type = {
   mono: { fontFamily: font.body, fontSize: 12 },
 } as const;
 
-/** Single source of truth for the responsive switch. */
+/**
+ * The responsive switches, in one place.
+ *
+ * Two thresholds, three shapes. Below DESKTOP the memory sidebar is an overlay
+ * the user summons; above it, the sidebar is permanent layout. Above WIDE there
+ * is room for a third column, so a selected entity opens beside the feed
+ * instead of pushing it around.
+ *
+ * DESKTOP stays at 900 rather than the more conventional 768: the sidebar is a
+ * fixed 300px, and at 768 that leaves the conversation 468px, which is tighter
+ * than the phone layout it just replaced.
+ */
 export const BREAKPOINT_DESKTOP = 900;
+export const BREAKPOINT_WIDE = 1280;
+
+/** Fixed-width chrome, needed by useLayout() to know what is left for the feed. */
+export const SIDEBAR_WIDTH = 300;
+export const DETAIL_WIDTH = 340;

@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { AskResponse } from '../lib/api';
 import { radius, space, type } from '../theme/tokens';
@@ -32,15 +32,13 @@ export type AnswerEntry = {
  * is labelled rather than left ambiguous, because "I don't have that from you,
  * but generally…" and "you told me…" must never look alike.
  */
-export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number }) {
+export function AnswerCard({ entry }: { entry: AnswerEntry }) {
   const { colors } = useTokens();
   const { mineMax, theirsMax } = useLayout();
 
   return (
-    <Animated.View
-      entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(180)}
-      style={styles.group}
-    >
+    // See note-card: no entry animation under a virtualised list.
+    <View style={styles.group}>
       {/* What you asked */}
       <View style={styles.right}>
         <View
@@ -134,7 +132,7 @@ export function AnswerCard({ entry, index }: { entry: AnswerEntry; index: number
           )}
         </View>
       </View>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -143,9 +141,12 @@ const styles = StyleSheet.create({
   right: { flexDirection: 'row', justifyContent: 'flex-end' },
   left: { flexDirection: 'row', justifyContent: 'flex-start' },
   // maxWidth is supplied per-render from useLayout(), in pixels — see note-card.
+  //
+  // No `flexShrink: 1` + `minWidth: 0` on these: inside the row wrappers above,
+  // that pair let Yoga shrink the bubble to min-content on Android, which
+  // rendered the text one character per line. Content-sized up to maxWidth is
+  // what a chat bubble actually wants.
   mine: {
-    flexShrink: 1,
-    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopRightRadius: 4,
@@ -153,8 +154,6 @@ const styles = StyleSheet.create({
   },
   askRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   theirs: {
-    flexShrink: 1,
-    minWidth: 0,
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopLeftRadius: 4,

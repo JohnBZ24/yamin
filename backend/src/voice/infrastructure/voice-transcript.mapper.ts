@@ -10,6 +10,7 @@ export class VoiceTranscriptMapper {
     domain.rawText = entity.rawText;
     domain.status = entity.status;
     domain.summary = entity.summary;
+    domain.peaks = entity.peaks;
     domain.embedding = entity.embedding;
     domain.userId = entity.userId;
     domain.createdAt = entity.createdAt;
@@ -28,6 +29,7 @@ export class VoiceTranscriptMapper {
     entity.rawText = domain.rawText;
     entity.status = domain.status;
     entity.summary = domain.summary;
+    entity.peaks = domain.peaks;
     entity.embedding = domain.embedding;
     entity.userId = domain.userId;
     return entity;

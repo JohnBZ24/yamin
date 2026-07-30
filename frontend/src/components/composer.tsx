@@ -20,12 +20,6 @@ import { radius, space, type } from '../theme/tokens';
 import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
 
-const SUGGESTIONS = [
-  'What am I supposed to follow up on?',
-  'Who did I talk to about pricing?',
-  'What is blocked right now?',
-];
-
 const STAGE_LABEL: Record<string, string> = {
   idle: '',
   reading: 'Working out what you meant…',
@@ -58,16 +52,16 @@ export function Composer({
   token,
   onOptimistic,
   onAsk,
-  showSuggestions,
 }: {
   token: string;
   onOptimistic: (note: {
     fileUuid: string;
     rawText: string;
     audioUrl: string | null;
+    /** Measured envelope of the recording; absent for typed notes. */
+    peaks?: number[];
   }) => void;
   onAsk: (question: string, intent: 'ask' | 'chitchat') => void;
-  showSuggestions: boolean;
 }) {
   const { colors } = useTokens();
   const { isNarrow } = useLayout();
@@ -79,6 +73,7 @@ export function Composer({
     isRecording,
     recorderState,
     pulseStyle,
+    idleStyle,
     submitText,
     startRecording,
     finishRecording,
@@ -102,10 +97,6 @@ export function Composer({
 
   return (
     <View style={styles.wrap}>
-      {showSuggestions && !hasText && !isRecording && (
-        <SuggestionChips suggestions={SUGGESTIONS} onPick={submitText} />
-      )}
-
       <View
         style={[
           styles.bar,
@@ -141,6 +132,7 @@ export function Composer({
           isRecording={isRecording}
           locked={locked}
           micOffset={micOffset}
+          idleStyle={idleStyle}
           onSend={() => submitText()}
           onStartRecording={startRecording}
           onFinishRecording={finishRecording}
@@ -170,35 +162,6 @@ function ComposerBusyBar({ label }: { label: string }) {
   );
 }
 
-function SuggestionChips({
-  suggestions,
-  onPick,
-}: {
-  suggestions: string[];
-  onPick: (s: string) => void;
-}) {
-  const { colors } = useTokens();
-  return (
-    <View style={styles.suggestions}>
-      {suggestions.map((s) => (
-        <Pressable
-          key={s}
-          onPress={() => onPick(s)}
-          style={({ pressed }) => [
-            styles.chip,
-            {
-              backgroundColor: pressed ? colors.surfaceHover : colors.surfaceSunken,
-              borderColor: colors.borderSubtle,
-            },
-          ]}
-        >
-          <Text style={[type.small, { color: colors.textMuted }]}>{s}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 /** The live take: how long, and what letting go would do right now. */
 function RecordingIndicator({
   durationMs,
@@ -214,14 +177,14 @@ function RecordingIndicator({
   const { colors } = useTokens();
 
   const hint = locked
-    ? '🔒 hands-free — tap ↑ to send'
+    ? 'Recording — tap send when finished'
     : !HOLD_TO_RECORD
-      ? 'recording'
+      ? 'Recording'
       : intent === 'lock'
-        ? 'release to go hands-free'
+        ? 'Release to keep recording'
         : intent === 'cancel'
-          ? 'release to cancel'
-          : 'slide up to lock · ‹ slide to cancel';
+          ? 'Release to cancel'
+          : 'Slide up to keep recording';
 
   return (
     <View style={styles.recRow}>
@@ -247,6 +210,7 @@ function ComposerActions({
   isRecording,
   locked,
   micOffset,
+  idleStyle,
   onSend,
   onStartRecording,
   onFinishRecording,
@@ -258,6 +222,7 @@ function ComposerActions({
   isRecording: boolean;
   locked: boolean;
   micOffset: SharedValue<{ x: number; y: number }>;
+  idleStyle: React.ComponentProps<typeof Animated.View>['style'];
   onSend: () => void;
   onStartRecording: () => void;
   onFinishRecording: (shouldSend: boolean) => void;
@@ -415,28 +380,35 @@ function ComposerActions({
 
   if (HOLD_TO_RECORD) {
     return (
-      <Animated.View
-        {...pan.panHandlers}
-        accessibilityRole="button"
-        accessibilityLabel="Hold to record, slide up to keep recording hands-free"
-        style={[
-          styles.circle,
-          micStyle,
-          { backgroundColor: isRecording ? colors.danger : colors.brand },
-        ]}
-      >
-        <Feather name="mic" size={18} color={colors.onBrand} />
+      // Two transforms, two layers: the outer one breathes while idle, the
+      // inner one follows the finger. Composing them into a single style would
+      // mean the drag and the breath fought over `transform`.
+      <Animated.View style={idleStyle}>
+        <Animated.View
+          {...pan.panHandlers}
+          accessibilityRole="button"
+          accessibilityLabel="Hold to record, slide up to keep recording hands-free"
+          style={[
+            styles.circle,
+            micStyle,
+            { backgroundColor: isRecording ? colors.danger : colors.brand },
+          ]}
+        >
+          <Feather name="mic" size={18} color={colors.onBrand} />
+        </Animated.View>
       </Animated.View>
     );
   }
 
   return (
-    <Pressable
-      onPress={onStartRecording}
-      style={[styles.circle, { backgroundColor: colors.brand }]}
-    >
-      <Feather name="mic" size={18} color={colors.onBrand} />
-    </Pressable>
+    <Animated.View style={idleStyle}>
+      <Pressable
+        onPress={onStartRecording}
+        style={[styles.circle, { backgroundColor: colors.brand }]}
+      >
+        <Feather name="mic" size={18} color={colors.onBrand} />
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -449,18 +421,6 @@ function formatDuration(ms: number) {
 
 const styles = StyleSheet.create({
   wrap: { gap: space.sm },
-  suggestions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.sm,
-    marginBottom: space.xs,
-  },
-  chip: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-  },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',

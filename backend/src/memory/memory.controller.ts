@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -233,6 +234,24 @@ export class MemoryController {
     @GetUser() userId: number,
   ) {
     return this.memoryService.getChat(userId, uuid);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Delete one conversation and all of its turns',
+    description:
+      'Removes the chat transcript only. Notes it remembered, entities it ' +
+      'created and reminders it scheduled are kept — those are your memory, ' +
+      'not the record of the conversation that produced them.',
+  })
+  @UseGuards(JwtAuthGuard)
+  @Delete('chats/:uuid')
+  @HttpCode(HttpStatus.OK)
+  async deleteChat(
+    @Param('uuid', ParseUUIDPipe) uuid: string,
+    @GetUser() userId: number,
+  ) {
+    return this.memoryService.deleteChat(userId, uuid);
   }
 
   @ApiBearerAuth()

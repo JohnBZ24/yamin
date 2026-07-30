@@ -58,6 +58,26 @@ export class ChatMessageRepository {
     );
   }
 
+  /**
+   * Delete a whole conversation, scoped to its owner.
+   *
+   * `userId` is part of the WHERE clause rather than checked beforehand: a uuid
+   * belonging to someone else must delete nothing, and a separate ownership
+   * lookup is a race — this way the database enforces it in the same statement.
+   * Returns how many turns went, so the caller can 404 a uuid that matched
+   * nothing instead of reporting a successful delete of nothing.
+   */
+  async deleteConversation(
+    { userId, conversationUuid }: { userId: number; conversationUuid: string },
+    queryRunner?: QueryRunner,
+  ): Promise<number> {
+    const result = await this.repo(queryRunner).delete({
+      userId,
+      conversationUuid,
+    });
+    return result.affected ?? 0;
+  }
+
   /** All turns of one conversation, oldest first — render order. */
   async listTurns(
     { userId, conversationUuid }: { userId: number; conversationUuid: string },

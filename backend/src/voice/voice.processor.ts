@@ -105,6 +105,20 @@ const EXTRACTION_SCHEMA = z.object({
 
 type ExtractedGraph = z.infer<typeof EXTRACTION_SCHEMA>;
 
+/**
+ * The stages a note passes through after the client hands it over.
+ *
+ * This pipeline takes five to twenty seconds — an embedding, a tool-calling
+ * pass for reminders, an extraction pass, then a transactional write. The
+ * client had no way to see any of that and showed one undifferentiated
+ * "Thinking…" for the whole run, which reads as a hang and gives no clue which
+ * step broke when one does.
+ *
+ * Naming them costs one socket emit each and turns the wait into a progress
+ * report of work the user can tell is real.
+ */
+export type VoiceStage = 'understanding' | 'extracting' | 'remembering';
+
 @Processor('voice-processing')
 @Injectable()
 export class VoiceProcessor extends WorkerHost {
@@ -126,6 +140,29 @@ export class VoiceProcessor extends WorkerHost {
     @InjectQueue('reminders-queue') private readonly remindersQueue: Queue,
   ) {
     super();
+  }
+
+  /**
+   * Best-effort progress. A dropped notification must never fail a note that
+   * is otherwise processing correctly, so this swallows its own errors — the
+   * cost of losing one is a label that does not advance, and the terminal
+   * `voice-processed` event still corrects the card.
+   */
+  private async emitStage(
+    userId: number,
+    fileUuid: string,
+    stage: VoiceStage,
+  ): Promise<void> {
+    try {
+      await this.notifier.sendToUser(userId, 'voice-progress', {
+        fileUuid,
+        stage,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not emit '${stage}' for ${fileUuid}: ${error.message}`,
+      );
+    }
   }
 
   private get isMockProvider(): boolean {
@@ -151,6 +188,7 @@ export class VoiceProcessor extends WorkerHost {
 
     try {
       // 1. Calculate Embeddings
+      await this.emitStage(userId, fileUuid, 'understanding');
       const embedding = await this.calculateEmbeddings(rawText);
 
       // Conversation context. Notes arrive as a stream of consciousness —
@@ -193,6 +231,7 @@ export class VoiceProcessor extends WorkerHost {
       // Entity linking: show the extractor what this user already talks about
       // so a second note about Sarah reuses "Sarah Okonkwo" rather than
       // inventing "Sarah from Acme" and fragmenting her into two people.
+      await this.emitStage(userId, fileUuid, 'extracting');
       const knownEntities = await this.nodeRepository.findLinkingCandidates({
         userId,
         limit: 60,
@@ -228,6 +267,7 @@ export class VoiceProcessor extends WorkerHost {
         .join('. ');
 
       // 4. Save to Database within a clean PostgreSQL transaction
+      await this.emitStage(userId, fileUuid, 'remembering');
       await safeTransaction(this.dataSource, async (queryRunner) => {
         const transcript = await this.voiceRepository.findOne({
           fields: { fileUuid } as any,
