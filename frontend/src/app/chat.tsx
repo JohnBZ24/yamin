@@ -443,24 +443,30 @@ function ChatTurn({ turn }: { turn: Turn }) {
 
   return (
     <View style={styles.turn}>
-      <Animated.View
-        entering={FadeInUp.duration(180)}
-        style={[styles.question, { maxWidth: mineMax, backgroundColor: colors.brand }]}
-      >
-        <Text style={[type.body, { color: colors.onBrand }]}>{turn.question}</Text>
-      </Animated.View>
+      <View style={styles.rowRight}>
+        <Animated.View
+          entering={FadeInUp.duration(180)}
+          style={[
+            styles.question,
+            { maxWidth: mineMax, backgroundColor: colors.brand },
+          ]}
+        >
+          <Text style={[type.body, { color: colors.onBrand }]}>{turn.question}</Text>
+        </Animated.View>
+      </View>
 
-      <Animated.View
-        entering={FadeInDown.duration(180)}
-        style={[
-          styles.answer,
-          {
-            maxWidth: theirsMax,
-            backgroundColor: colors.surface,
-            borderColor: colors.borderSubtle,
-          },
-        ]}
-      >
+      <View style={styles.rowLeft}>
+        <Animated.View
+          entering={FadeInDown.duration(180)}
+          style={[
+            styles.answer,
+            {
+              maxWidth: theirsMax,
+              backgroundColor: colors.surface,
+              borderColor: colors.borderSubtle,
+            },
+          ]}
+        >
         <View style={styles.answerHead}>
           <Feather name="zap" size={12} color={colors.textMuted} />
           <Text style={[type.label, { color: colors.textMuted }]}>Yamin</Text>
@@ -502,9 +508,10 @@ function ChatTurn({ turn }: { turn: Turn }) {
               turn.result.sources.map((source, i) => (
                 <SourceRow key={source.fileUuid + i} index={i + 1} source={source} />
               ))}
-          </>
-        )}
-      </Animated.View>
+            </>
+          )}
+        </Animated.View>
+      </View>
     </View>
   );
 }
@@ -559,10 +566,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
   },
-  // Explicitly full-width — see the same note on `group` in note-card.tsx. The
-  // bubbles are auto-width boxes bounded by maxWidth, and an auto width with no
-  // definite parent to resolve against collapses to min-content on Android.
-  turn: { width: '100%', gap: space.sm },
+  turn: { gap: space.sm },
   // maxWidth comes from useLayout() in pixels, not '%'.
   //
   // No `flexShrink`/`minWidth: 0` here, deliberately. Those govern the MAIN
@@ -571,15 +575,20 @@ const styles = StyleSheet.create({
   // taken literally: the bubble collapses to min-content and the text renders
   // one character per line, stacked downwards. alignSelf plus a pixel maxWidth
   // is the whole job.
+  // Rows decide the side; the bubbles are content-sized up to maxWidth. Same
+  // pattern as answer-card.tsx and note-card.tsx — see the note there. An
+  // `alignSelf` bubble is an auto-width box, and on Android that collapses to
+  // min-content, rendering one word per line. No flexShrink/minWidth here
+  // either: that pair collapses it to one character per line instead.
+  rowRight: { flexDirection: 'row', justifyContent: 'flex-end' },
+  rowLeft: { flexDirection: 'row', justifyContent: 'flex-start' },
   question: {
-    alignSelf: 'flex-end',
     borderRadius: radius.lg,
     borderBottomRightRadius: radius.sm,
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
   },
   answer: {
-    alignSelf: 'flex-start',
     borderWidth: 1,
     borderRadius: radius.lg,
     borderTopLeftRadius: radius.sm,

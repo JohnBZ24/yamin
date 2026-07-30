@@ -200,37 +200,40 @@ export function NoteCard({
     // pass, costing frames during the scroll that is already the expensive part.
     <View style={styles.group}>
       {/* What you said */}
-      <View
-        style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
-      >
-        {note.audioUrl ? (
-          <AudioBubble url={note.audioUrl} peaks={note.peaks} />
-        ) : null}
-        <Text style={[type.body, { color: colors.onBrand }]}>
-          {note.rawText || '…'}
-        </Text>
-        <View style={styles.mineFoot}>
-          {onDelete ? <DeleteButton onDelete={onDelete} /> : null}
-          <Text style={[type.mono, { color: colors.onBrandMuted }]}>
-            {new Date(note.createdAt).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
+      <View style={styles.rowRight}>
+        <View
+          style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
+        >
+          {note.audioUrl ? (
+            <AudioBubble url={note.audioUrl} peaks={note.peaks} />
+          ) : null}
+          <Text style={[type.body, { color: colors.onBrand }]}>
+            {note.rawText || '…'}
           </Text>
+          <View style={styles.mineFoot}>
+            {onDelete ? <DeleteButton onDelete={onDelete} /> : null}
+            <Text style={[type.mono, { color: colors.onBrandMuted }]}>
+              {new Date(note.createdAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
+          </View>
         </View>
       </View>
 
       {/* What Yamin understood */}
-      <View
-        style={[
-          styles.theirs,
-          {
-            maxWidth: theirsMax,
-            backgroundColor: colors.surface,
-            borderColor: colors.borderSubtle,
-          },
-        ]}
-      >
+      <View style={styles.rowLeft}>
+        <View
+          style={[
+            styles.theirs,
+            {
+              maxWidth: theirsMax,
+              backgroundColor: colors.surface,
+              borderColor: colors.borderSubtle,
+            },
+          ]}
+        >
         <View style={styles.head}>
           <View style={styles.brandRow}>
             <Feather name="zap" size={12} color={colors.brandText} />
@@ -267,27 +270,20 @@ export function NoteCard({
                   {n.name}
                 </Text>
               </View>
-            ))}
-          </View>
-        )}
+              ))}
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  /**
-   * Explicitly full-width, not left to `alignItems: stretch`.
-   *
-   * The bubbles below size themselves with `alignSelf` + `maxWidth`, which makes
-   * their width `auto` — and Yoga resolves an auto cross-axis size against the
-   * space the PARENT offers. Inside a virtualised list on Android that parent
-   * width is not always definite by the time the row measures, and an auto width
-   * with nothing to measure against falls back to min-content: the longest word.
-   * That is the "messages render vertically, one word per line" bug. Stating the
-   * width here gives the bubbles something real to resolve against.
-   */
-  group: { width: '100%', gap: space.sm, marginBottom: space.xl },
+  // Matches answer-card.tsx's `group`. The row wrappers below stretch to this
+  // width by default, which is what gives the bubbles a definite width to size
+  // against.
+  group: { gap: space.sm, marginBottom: space.xl },
   // maxWidth is supplied per-render from useLayout(), in pixels — never '%',
   // which Yoga resolves against an indefinite parent and collapses to
   // min-content.
@@ -298,8 +294,31 @@ const styles = StyleSheet.create({
   // out one character per line, stacked downwards. There is no row now and no
   // shrink: alignSelf picks the side, maxWidth caps the measure, and the bubble
   // hugs its content in between.
+  /**
+   * Each bubble sits in its own row, and the row decides which side it hugs.
+   * Identical to `right`/`left` in answer-card.tsx — deliberately the same
+   * pattern, because that one was arrived at on a device.
+   *
+   * This replaces `alignSelf: 'flex-end'` on the bubble itself, which is what
+   * rendered notes one word per line on Android. `alignSelf` sets a child's
+   * CROSS-axis size in a column, making the bubble's width `auto` — resolved by
+   * a shrink-to-fit measure. Inside a virtualised FlatList that measure can run
+   * before the parent's width is definite, and an auto width with nothing to
+   * measure against falls back to min-content: the longest single word.
+   *
+   * In a row the width is a MAIN-axis size instead, resolved against the row's
+   * definite width, and the bubble is simply content-sized up to `maxWidth`.
+   */
+  rowRight: { flexDirection: 'row', justifyContent: 'flex-end' },
+  rowLeft: { flexDirection: 'row', justifyContent: 'flex-start' },
+  /**
+   * No `flexShrink: 1` and no `minWidth: 0` on these two. answer-card.tsx
+   * records why: inside these row wrappers that pair lets Yoga shrink the bubble
+   * to min-content on Android, which renders one CHARACTER per line — a worse
+   * version of the bug being fixed here. Content-sized up to maxWidth is what a
+   * chat bubble actually wants.
+   */
   mine: {
-    alignSelf: 'flex-end',
     padding: space.lg,
     borderRadius: radius.lg,
     // Squared corner on the sender's side — the standard chat "tail" cue.
@@ -307,7 +326,6 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   theirs: {
-    alignSelf: 'flex-start',
     padding: space.lg,
     borderRadius: radius.lg,
     borderTopLeftRadius: 4,
