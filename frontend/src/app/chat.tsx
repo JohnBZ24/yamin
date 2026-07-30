@@ -52,7 +52,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const { c } = useLocalSearchParams<{ c?: string }>();
   const { pad, columnWidth } = useLayout();
-  const { bottomInset, keyboardVisible } = useKeyboardInset();
+  const { bottomInset, keyboardVisible, feedBottomInset } = useKeyboardInset();
   const { ready, token } = useSession();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
@@ -271,7 +271,13 @@ export default function ChatScreen() {
         style={{ flex: 1 }}
         contentContainerStyle={[
           styles.feed,
-          { paddingHorizontal: pad, paddingTop: pad },
+          {
+            paddingHorizontal: pad,
+            paddingTop: pad,
+            // Clears the input bar once the keyboard lifts it — same reasoning
+            // as the feed in index.tsx, see feedBottomInset.
+            paddingBottom: space.xxl + feedBottomInset,
+          },
         ]}
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}

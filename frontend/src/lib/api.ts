@@ -157,6 +157,16 @@ export type VoiceNote = {
    * recorded before this shipped — the player falls back to a flat shape.
    */
   peaks?: number[] | null;
+  /**
+   * Whether the note actually went into the memory.
+   *
+   * Separate from `status` on purpose: a note is `processed` whether or not
+   * anything about it was worth keeping. The extractor judges that, and a note
+   * with nothing about your life in it ("hello") is stored without an embedding,
+   * which means search can never return it. Absent on optimistic rows that have
+   * not been through the server yet.
+   */
+  remembered?: boolean;
   nodes?: GraphNode[];
   relations?: unknown[];
 };

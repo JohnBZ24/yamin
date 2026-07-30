@@ -63,10 +63,27 @@ export function SidebarShell({
   if (!open) return null;
 
   return (
-    <Pressable
-      style={[styles.overlay, { backgroundColor: colors.overlay }]}
-      onPress={onCloseMobile}
-    >
+    /**
+     * The scrim is a SIBLING of the drawer, not its parent.
+     *
+     * It used to wrap it, which meant every touch inside the drawer began inside
+     * a Pressable — and the drawer then needed a second, inner Pressable with an
+     * empty onPress to stop taps closing it. Two nested Pressables around a
+     * scrolling list is a responder fight: a drag that started on a row which is
+     * not itself pressable (a reminder) was claimed by the wrapper, so the list
+     * would not scroll until you happened to start the drag on blank space.
+     *
+     * Side by side, the drawer has no pressable ancestor at all: the list gets
+     * every gesture that starts inside it, and the scrim still catches taps
+     * beside it because it fills the layer underneath.
+     */
+    <View style={styles.overlay}>
+      <Pressable
+        style={[styles.scrim, { backgroundColor: colors.overlay }]}
+        onPress={onCloseMobile}
+        accessibilityRole="button"
+        accessibilityLabel="Close sidebar"
+      />
       {/*
         No entering animation, deliberately. This was a spring
         (SlideInLeft.springify().damping(22)) that overshot and wobbled, and
@@ -80,16 +97,13 @@ export function SidebarShell({
           { width: drawerWidth, backgroundColor: colors.canvas },
         ]}
       >
-        {/* Swallows taps so touching the drawer doesn't close it. */}
-        <Pressable style={styles.fill} onPress={() => {}}>
-          <MemorySidebar
-            token={token}
-            onClose={onCloseMobile}
-            onSignOut={onSignOut}
-          />
-        </Pressable>
+        <MemorySidebar
+          token={token}
+          onClose={onCloseMobile}
+          onSignOut={onSignOut}
+        />
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -105,6 +119,8 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 100,
   },
+  // Fills the layer beneath the drawer. Declared first so the drawer, later in
+  // the tree, paints on top of it.
+  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   mobile: { height: '100%' },
-  fill: { flex: 1 },
 });

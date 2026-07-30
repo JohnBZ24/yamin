@@ -82,6 +82,32 @@ const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 3;
 
 /**
+ * How far past its own edge the graph may be dragged, so a pan at the boundary
+ * still feels alive rather than nailed down.
+ */
+const PAN_OVERSCROLL = 48;
+
+/**
+ * The furthest the graph may be translated on one axis before it would leave
+ * empty space in the viewport.
+ *
+ * The simulation already clamps every node into [PAD, extent - PAD], so at
+ * zoom 1 the content is exactly viewport-sized and the honest pan range is zero.
+ * Zooming in makes it larger than the viewport by `extent * (z - 1)`, half of
+ * which is available in each direction.
+ *
+ * Without this the graph could be dragged arbitrarily far into blank space and
+ * simply lost — nothing pulled it back, and there is no "reset view" control to
+ * recover with.
+ */
+function panLimit(extent: number, z: number): number {
+  return Math.max(0, (extent * (z - 1)) / 2) + PAN_OVERSCROLL;
+}
+
+const clamp = (value: number, limit: number) =>
+  Math.min(limit, Math.max(-limit, value));
+
+/**
  * One edge. Memoised on primitives only.
  *
  * The whole SVG used to re-render on every tap: selecting a node changed
@@ -258,6 +284,17 @@ export function KnowledgeGraph({
   // Where the gesture started, so movement is applied as a delta.
   const start = useRef({ x: 0, y: 0, zoom: 1, distance: 0 });
 
+  /**
+   * Viewport size for the pan clamp, read from a ref rather than closed over:
+   * the PanResponder below is built once (its deps are `[]`, because rebuilding
+   * it mid-gesture would drop the gesture), so a captured `width` would be the
+   * value from first render forever — and wrong after a rotation.
+   */
+  const sizeRef = useRef({ width, height });
+  useEffect(() => {
+    sizeRef.current = { width, height };
+  }, [width, height]);
+
   const viewStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: tx.value },
@@ -298,12 +335,20 @@ export function KnowledgeGraph({
             if (start.current.distance > 0 && distance > 0) {
               const next = start.current.zoom * (distance / start.current.distance);
               zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+
+              // Zooming OUT shrinks the legal pan range, so a translation that
+              // was in bounds a moment ago may no longer be. Re-clamping here is
+              // what stops a pinch-out from stranding the graph off-screen.
+              const { width: w, height: h } = sizeRef.current;
+              tx.value = clamp(tx.value, panLimit(w, zoom.value));
+              ty.value = clamp(ty.value, panLimit(h, zoom.value));
             }
             return;
           }
 
-          tx.value = start.current.x + g.dx;
-          ty.value = start.current.y + g.dy;
+          const { width: w, height: h } = sizeRef.current;
+          tx.value = clamp(start.current.x + g.dx, panLimit(w, zoom.value));
+          ty.value = clamp(start.current.y + g.dy, panLimit(h, zoom.value));
         },
 
         // A second finger lifting mid-pinch leaves a stale baseline; re-seed it

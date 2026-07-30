@@ -60,7 +60,7 @@ export default function YaminScreen() {
   const { colors } = useTokens();
   const toast = useToast();
   const { isDesktop, isWide, pad, columnWidth, drawerWidth } = useLayout();
-  const { bottomInset, keyboardVisible } = useKeyboardInset();
+  const { bottomInset, keyboardVisible, feedBottomInset } = useKeyboardInset();
 
   const { ready, token, signIn, signUp, signOut } = useSession();
   const { socket, online } = useRealtime();
@@ -218,7 +218,13 @@ export default function YaminScreen() {
       queryClient.setQueryData<VoiceNote[]>(queryKeys.notes, (prev) =>
         (prev ?? []).map((n) =>
           n.fileUuid === data.fileUuid
-            ? { ...n, status: 'processed', summary: data.summary, nodes: data.nodes }
+            ? {
+                ...n,
+                status: 'processed',
+                summary: data.summary,
+                nodes: data.nodes,
+                remembered: data.remembered,
+              }
             : n,
         ),
       );
@@ -257,13 +263,17 @@ export default function YaminScreen() {
   // The composer lifting off the keyboard shortens the feed; without this the
   // last message ends up hidden behind it, which is exactly the message the
   // user was replying to.
+  // Depends on feedBottomInset as well as visibility: the padding that clears
+  // the composer arrives with the measured IME height, which can land a frame
+  // after `keyboardVisible` flips. Scrolling only on the flag scrolled to the
+  // pre-padding bottom and stopped short.
   useEffect(() => {
     if (!keyboardVisible) return;
     const frame = requestAnimationFrame(() =>
       feedRef.current?.scrollToEnd({ animated: true }),
     );
     return () => cancelAnimationFrame(frame);
-  }, [keyboardVisible]);
+  }, [keyboardVisible, feedBottomInset]);
 
   // Follow the conversation only when it actually grows. This used to hang off
   // the list's onContentSizeChange, which also fires when existing content is
@@ -405,7 +415,14 @@ export default function YaminScreen() {
             style={styles.fill}
             contentContainerStyle={[
               styles.feed,
-              { paddingHorizontal: pad, paddingTop: pad },
+              {
+                paddingHorizontal: pad,
+                paddingTop: pad,
+                // Clears the composer once the keyboard lifts it over the feed.
+                // See feedBottomInset in useKeyboardInset for why scrolling to
+                // the end alone never fixed this.
+                paddingBottom: space.xxl + feedBottomInset,
+              },
             ]}
             keyboardShouldPersistTaps="handled"
             /**

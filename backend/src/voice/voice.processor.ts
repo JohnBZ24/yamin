@@ -461,6 +461,11 @@ export class VoiceProcessor extends WorkerHost {
         summary,
         nodes: graphData.nodes,
         relations: graphData.relations,
+        // Carried on the event as well as the history endpoint, so the badge is
+        // correct on the row that is already on screen rather than only after the
+        // next refetch. Matches `memorable`, which is what decided whether an
+        // embedding was written just above.
+        remembered: memorable,
       });
     } catch (error) {
       /**

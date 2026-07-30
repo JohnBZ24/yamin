@@ -184,9 +184,30 @@ export function NoteCard({
   const { colors } = useTokens();
   const { mineMax, theirsMax } = useLayout();
 
+  /**
+   * "Remembered" is a claim about the memory, so it is only made when the note
+   * is actually in it.
+   *
+   * A note is `processed` whether or not the extractor found anything about the
+   * user's life in it, and one judged not memorable is stored without an
+   * embedding — invisible to search forever. Labelling that "Remembered" told the
+   * user the opposite of what happened, which then reads as a bug the moment
+   * Yamin answers "I don't have anything about that" about a note wearing a green
+   * Remembered badge.
+   *
+   * `undefined` means the row predates this field or has not been through the
+   * server yet; it keeps the old label rather than accusing a note of not being
+   * saved on no evidence.
+   */
   const tone =
     note.status === 'processed'
-      ? { bg: colors.successSurface, fg: colors.successText, label: 'Remembered' }
+      ? note.remembered === false
+        ? {
+            bg: colors.surfaceSunken,
+            fg: colors.textMuted,
+            label: 'Not saved',
+          }
+        : { bg: colors.successSurface, fg: colors.successText, label: 'Remembered' }
       : note.status === 'failed'
         ? { bg: colors.dangerSurface, fg: colors.dangerText, label: 'Failed' }
         : {

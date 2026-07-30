@@ -29,6 +29,14 @@ import { STT_PROVIDER } from '../ai/providers/stt.provider';
 import type { SttProvider } from '../ai/providers/stt.provider';
 import { onAfterCommit } from '../utils/queryRunner/after-commit';
 
+/**
+ * A note as the client sees it: everything except the embedding, plus a boolean
+ * saying whether there was one.
+ */
+export type VoiceNoteView = Omit<VoiceTranscript, 'embedding'> & {
+  remembered: boolean;
+};
+
 @Injectable()
 export class VoiceService {
   private readonly logger = new Logger(VoiceService.name);
@@ -465,7 +473,7 @@ export class VoiceService {
     page: number,
     limit: number,
     queryRunner?: QueryRunner,
-  ): Promise<{ data: VoiceTranscript[]; totalCount: number }> {
+  ): Promise<{ data: VoiceNoteView[]; totalCount: number }> {
     const result = await this.voiceRepository.findManyWithPagination({
       userId,
       paginationOptions: { page, limit },
@@ -473,9 +481,29 @@ export class VoiceService {
     });
 
     const data = await Promise.all(
-      result.data.map(async (t) => ({
-        ...t,
-        audioUrl: await this.signAudioUrl(t.audioUrl),
+      // `embedding` is destructured off rather than spread through, and that is
+      // not cosmetic: it is a 1536-float vector per note, so a page of twenty was
+      // sending roughly half a megabyte of numbers to a phone that has no use for
+      // any of them. Its PRESENCE is the only part the client needs, and that is
+      // one boolean.
+      result.data.map(async ({ embedding, ...note }) => ({
+        ...note,
+        audioUrl: await this.signAudioUrl(note.audioUrl),
+        /**
+         * Whether this note is actually in the memory.
+         *
+         * `status: 'processed'` does not mean remembered. The extractor decides
+         * whether a note has anything about the user's life in it, and a note
+         * judged not memorable is written WITHOUT an embedding — so semantic
+         * search can never return it. The client showed a green "Remembered"
+         * badge on those all the same, which claims the opposite of what
+         * happened.
+         *
+         * Derived from the embedding rather than stored separately so it cannot
+         * drift from the thing it describes: no embedding, not retrievable, not
+         * remembered.
+         */
+        remembered: embedding != null,
       })),
     );
 

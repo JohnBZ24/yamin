@@ -75,6 +75,27 @@ export function MemorySidebar({
   const { data: recentChats = [] } = useChats(token, 4);
   const { data: reminders = [] } = useReminders(token, 4);
   const deleteChat = useDeleteChat(token);
+
+  /**
+   * Which sections are expanded.
+   *
+   * The sidebar showed everything at once: reminders, recent chats, and then
+   * every entity Yamin has ever extracted, one row each, in a single scroll. The
+   * entity list is the bulk of that and the least actionable part of it — it is
+   * the same data the graph screen draws, only as a flat list — so it starts
+   * collapsed and the two sections the user acts on start open.
+   *
+   * Collapsed, not deleted: the count stays visible in the header, so "how much
+   * does Yamin know about me" is still answerable at a glance, which is most of
+   * what that list was doing.
+   */
+  const [expanded, setExpanded] = useState({
+    reminders: true,
+    chats: true,
+    things: false,
+  });
+  const toggle = (key: keyof typeof expanded) =>
+    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   // Nothing is fetched while nothing is selected; expanding a row is what
   // enables this. When the parent owns selection it is also rendering the
   // detail itself, so there is nothing to fetch for here.
@@ -213,7 +234,10 @@ export function MemorySidebar({
       </View>
 
       <FlatList
-        data={entities}
+        // Collapsing the entity section empties the list rather than hiding a
+        // rendered one, so the rows are genuinely unmounted and the FlatList has
+        // nothing to virtualise while it is closed.
+        data={expanded.things ? entities : []}
         keyExtractor={(e) => String(e.id)}
         renderItem={renderEntity}
         contentContainerStyle={styles.list}
@@ -223,38 +247,33 @@ export function MemorySidebar({
                 reminder that fires and leaves no trace is indistinguishable
                 from one that was never set. */}
             {reminders.length > 0 && (
-              <View style={styles.chatsSection}>
-                <View style={styles.chatsHead}>
-                  <Text style={[type.label, { color: colors.textSubtle }]}>
-                    Reminders
-                  </Text>
-                </View>
+              <Section
+                title="Reminders"
+                count={reminders.length}
+                open={expanded.reminders}
+                onToggle={() => toggle('reminders')}
+              >
                 {reminders.map((reminder) => (
                   <ReminderRow key={reminder.id} reminder={reminder} />
                 ))}
-              </View>
+              </Section>
             )}
 
             {recentChats.length > 0 && (
-              <View style={styles.chatsSection}>
-                <View style={styles.chatsHead}>
-                  <Text style={[type.label, { color: colors.textSubtle }]}>
-                    Recent chats
-                  </Text>
-                  <Pressable
-                    onPress={() => {
-                      onClose?.();
-                      router.push('/chats');
-                    }}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="See all chats"
-                  >
-                    <Text style={[type.smallMedium, { color: colors.textMuted }]}>
-                      All
-                    </Text>
-                  </Pressable>
-                </View>
+              <Section
+                title="Recent chats"
+                count={recentChats.length}
+                open={expanded.chats}
+                onToggle={() => toggle('chats')}
+                action={{
+                  label: 'All',
+                  accessibilityLabel: 'See all chats',
+                  onPress: () => {
+                    onClose?.();
+                    router.push('/chats');
+                  },
+                }}
+              >
                 {recentChats.map((chat) => (
                   <RecentChatRow
                     key={chat.conversationUuid}
@@ -269,17 +288,23 @@ export function MemorySidebar({
                     onDelete={() => deleteChat.mutate(chat.conversationUuid)}
                   />
                 ))}
-              </View>
+              </Section>
             )}
-            <Text style={[type.label, { color: colors.textSubtle }]}>
-              {entities.length} thing{entities.length === 1 ? '' : 's'} Yamin knows
-            </Text>
+
+            <Section
+              title={`Thing${entities.length === 1 ? '' : 's'} Yamin knows`}
+              count={entities.length}
+              open={expanded.things}
+              onToggle={() => toggle('things')}
+            >
+              {entities.length === 0 && (
+                <Text style={[type.small, { color: colors.textSubtle }]}>
+                  Nothing yet. Tell Yamin about someone and they&apos;ll appear
+                  here.
+                </Text>
+              )}
+            </Section>
           </View>
-        }
-        ListEmptyComponent={
-          <Text style={[type.small, { color: colors.textSubtle }]}>
-            Nothing yet. Tell Yamin about someone and they&apos;ll appear here.
-          </Text>
         }
       />
 
@@ -309,6 +334,78 @@ export function MemorySidebar({
           <Text style={[type.smallMedium, { color: colors.textMuted }]}>Sign out</Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+/**
+ * A collapsible sidebar section: a tappable heading, a count, and its rows.
+ *
+ * The count is on the heading rather than inside, so a collapsed section still
+ * reports what it holds — "Reminders 2" is most of the reason to look at the
+ * sidebar at all, and hiding that behind a tap would trade clutter for a
+ * different kind of uselessness.
+ */
+function Section({
+  title,
+  count,
+  open,
+  onToggle,
+  action,
+  children,
+}: {
+  title: string;
+  count?: number;
+  open: boolean;
+  onToggle: () => void;
+  /** Optional secondary link in the heading, e.g. "All". */
+  action?: { label: string; accessibilityLabel: string; onPress: () => void };
+  children?: React.ReactNode;
+}) {
+  const { colors } = useTokens();
+
+  return (
+    <View style={styles.chatsSection}>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${open ? 'Collapse' : 'Expand'} ${title}`}
+        style={({ pressed }) => [
+          styles.sectionHead,
+          { backgroundColor: pressed ? colors.surfaceHover : 'transparent' },
+        ]}
+      >
+        <Feather
+          name={open ? 'chevron-down' : 'chevron-right'}
+          size={14}
+          color={colors.textSubtle}
+        />
+        <Text style={[type.label, styles.sectionTitle, { color: colors.textSubtle }]}>
+          {title}
+        </Text>
+        {count !== undefined && (
+          <Text style={[type.mono, { color: colors.textSubtle }]}>{count}</Text>
+        )}
+        {action && (
+          <Pressable
+            // Stops the heading's own press from firing, which would collapse the
+            // section the user is trying to navigate out of.
+            onPress={(event) => {
+              event.stopPropagation();
+              action.onPress();
+            }}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={action.accessibilityLabel}
+          >
+            <Text style={[type.smallMedium, { color: colors.textMuted }]}>
+              {action.label}
+            </Text>
+          </Pressable>
+        )}
+      </Pressable>
+      {open && children}
     </View>
   );
 }
@@ -454,6 +551,17 @@ const styles = StyleSheet.create({
   list: { padding: space.md, gap: space.xs },
   listHeader: { gap: space.md },
   chatsSection: { gap: 2 },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+    // A real tap target: this heading is now a control, not a label.
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+    marginBottom: space.xs,
+  },
+  sectionTitle: { flex: 1, minWidth: 0 },
   chatsHead: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -32,6 +32,23 @@ export type KeyboardInset = {
   bottomInset: number;
   /** Whether the keyboard is up — for keeping the newest message in view. */
   keyboardVisible: boolean;
+  /**
+   * Extra bottom padding the FEED needs so its last row is not hidden behind
+   * the lifted input bar.
+   *
+   * Zero on the fallback path and non-zero on the linked one, which looks
+   * backwards until you see how each moves the bar. KeyboardStickyView lifts it
+   * with a TRANSFORM: the bar's layout box never moves, so the feed still
+   * believes it owns that space and draws its last message underneath the bar.
+   * The fallback instead grows the bar's own padding, which is real layout — the
+   * feed shrinks by exactly that much on its own, and adding padding here too
+   * would leave a keyboard-sized gap above the composer.
+   *
+   * This is why "scroll to the end when the keyboard opens" was not enough: the
+   * end of the content was already behind the bar, so scrolling to it changed
+   * nothing.
+   */
+  feedBottomInset: number;
 };
 
 /**
@@ -41,6 +58,10 @@ export type KeyboardInset = {
 function useLinkedInset(): KeyboardInset {
   const insets = useSafeAreaInsets();
   const isVisible = useNativeKeyboardState!<boolean>((state) => state.isVisible);
+  // The real IME height, from the platform insets rather than inferred — the
+  // whole reason this library is here. Only used to pad the feed; the bar itself
+  // is moved by KeyboardStickyView.
+  const height = useNativeKeyboardState!<number>((state) => state.height ?? 0);
 
   return {
     // An open keyboard covers the navigation bar, and the sticky view is
@@ -48,6 +69,7 @@ function useLinkedInset(): KeyboardInset {
     // space under the input.
     bottomInset: isVisible ? 0 : insets.bottom,
     keyboardVisible: isVisible,
+    feedBottomInset: isVisible ? height : 0,
   };
 }
 
@@ -85,6 +107,9 @@ function useFallbackInset(): KeyboardInset {
   return {
     bottomInset: keyboardHeight > 0 ? keyboardHeight : insets.bottom,
     keyboardVisible: keyboardHeight > 0,
+    // Deliberately 0: `bottomInset` above already grows the bar's layout box, so
+    // the feed has shrunk by the keyboard height without any help.
+    feedBottomInset: 0,
   };
 }
 
