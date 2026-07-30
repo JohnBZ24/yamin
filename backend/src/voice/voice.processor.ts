@@ -1,7 +1,7 @@
 import { Processor, WorkerHost, InjectQueue } from '@nestjs/bullmq';
 import { Job, Queue } from 'bullmq';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { generateObject, generateText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
@@ -127,6 +127,26 @@ export type VoiceStage = 'understanding' | 'extracting' | 'remembering';
  */
 const DEFAULT_REMINDER_HOUR = 9;
 
+/**
+ * The note was deleted while this job was still running, so there is nothing
+ * left to write and nothing to report.
+ *
+ * Not a failure, and deliberately its own type so the catch block can tell it
+ * apart from one. Deleting a still-processing note used to fail the job with
+ * "Voice transcript record not found", which BullMQ then retried three times —
+ * re-running the embedding, the secretary tool pass and the extraction on every
+ * attempt — before pushing the raw internal message to the user's phone as an
+ * error, for a note they had chosen to delete. Observed in production: five
+ * pipeline runs and a `voice-failed` toast, five seconds after the user hit
+ * delete.
+ */
+class NoteDeletedError extends Error {
+  constructor(fileUuid: string) {
+    super(`Voice note ${fileUuid} was deleted while processing`);
+    this.name = 'NoteDeletedError';
+  }
+}
+
 @Processor('voice-processing')
 @Injectable()
 export class VoiceProcessor extends WorkerHost {
@@ -173,6 +193,25 @@ export class VoiceProcessor extends WorkerHost {
     }
   }
 
+  /**
+   * Throws NoteDeletedError if the user has deleted this note since the job was
+   * queued. Silent when the note is fine, and silent when there is no row at all
+   * — the genuinely-absent case is left to the caller, which still treats it as
+   * the real error it is.
+   */
+  private async assertNoteStillWanted(
+    fileUuid: string,
+    queryRunner?: QueryRunner,
+  ): Promise<void> {
+    const state = await this.voiceRepository.findDeletionState(
+      fileUuid,
+      queryRunner,
+    );
+    if (state?.isDeleted) {
+      throw new NoteDeletedError(fileUuid);
+    }
+  }
+
   private get isMockProvider(): boolean {
     return (
       this.configService.getOrThrow('ai', { infer: true }).provider ===
@@ -195,6 +234,15 @@ export class VoiceProcessor extends WorkerHost {
     }
 
     try {
+      /**
+       * Cheapest possible check, and it goes first on purpose.
+       *
+       * The pipeline below costs an embedding plus two LLM passes, so noticing a
+       * deleted note only at the closing transaction — which is where it used to
+       * surface — wastes all of that, then wastes it again on every retry.
+       */
+      await this.assertNoteStillWanted(fileUuid);
+
       // 1. Calculate Embeddings
       await this.emitStage(userId, fileUuid, 'understanding');
       const embedding = await this.calculateEmbeddings(rawText);
@@ -283,6 +331,12 @@ export class VoiceProcessor extends WorkerHost {
         });
 
         if (!transcript) {
+          // Re-checked inside the transaction, not just at the top: the delete
+          // can land at any point during the five-to-twenty seconds of work
+          // above, and this is the window that actually matters because it is
+          // the one where a write would otherwise resurrect graph rows for a
+          // note the user has removed.
+          await this.assertNoteStillWanted(fileUuid, queryRunner);
           throw new Error(
             `Voice transcript record not found for UUID: ${fileUuid}`,
           );
@@ -409,6 +463,21 @@ export class VoiceProcessor extends WorkerHost {
         relations: graphData.relations,
       });
     } catch (error) {
+      /**
+       * A deleted note is a completed job, not a failed one.
+       *
+       * Returning rather than rethrowing is the whole point: it stops BullMQ
+       * retrying, stops the note being stamped `failed` (the row is gone, so the
+       * write would do nothing anyway), and stops a `voice-failed` toast landing
+       * on the user's phone about a note they deliberately deleted.
+       */
+      if (error instanceof NoteDeletedError) {
+        this.logger.log(
+          `Job ${job.id} abandoned: ${error.message}. Nothing to write.`,
+        );
+        return;
+      }
+
       this.logger.error(
         `Failed to process job ${job.id}: ${error.message}`,
         error.stack,

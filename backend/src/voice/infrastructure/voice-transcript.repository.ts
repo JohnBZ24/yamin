@@ -48,6 +48,32 @@ export class VoiceTranscriptRepository {
     return entity ? VoiceTranscriptMapper.toDomain(entity) : null;
   }
 
+  /**
+   * Does a row exist for this UUID, and has it been soft-deleted?
+   *
+   * `findOne` cannot answer the second half: TypeORM hides soft-deleted rows, so
+   * a deleted note and a note that never existed are indistinguishable through
+   * it. The worker needs to tell them apart, because they call for opposite
+   * responses — a user who deleted a note while it was still processing wants
+   * the job abandoned quietly, whereas a genuinely absent row is a real bug
+   * worth retrying and reporting.
+   *
+   * Returns null only when there is no row at all.
+   */
+  async findDeletionState(
+    fileUuid: VoiceTranscript['fileUuid'],
+    queryRunner?: QueryRunner,
+  ): Promise<{ id: number; isDeleted: boolean } | null> {
+    const repository = this.getRepository(queryRunner);
+    const entity = await repository.findOne({
+      where: { fileUuid } as any,
+      withDeleted: true,
+      select: ['id', 'deletedAt'] as any,
+    });
+    if (!entity) return null;
+    return { id: entity.id, isDeleted: entity.deletedAt != null };
+  }
+
   async update(
     id: VoiceTranscript['id'],
     payload: DeepPartial<VoiceTranscript>,

@@ -232,7 +232,16 @@ export default function YaminScreen() {
           n.fileUuid === data.fileUuid ? { ...n, status: 'failed' } : n,
         ),
       );
-      toast(data.error ?? 'That note could not be processed', 'error');
+      /**
+       * The server's message is for the log, not for the user.
+       *
+       * `data.error` is a raw internal string — a real one seen on a phone was
+       * "Voice transcript record not found for UUID: 228fbf61-c547-…". That
+       * tells the user nothing they can act on and reads as a crash. The failed
+       * badge on the note itself already says which note is affected.
+       */
+      if (data.error) console.warn('voice-failed:', data.error);
+      toast('That note could not be processed', 'error');
     };
 
     socket.on('voice-progress', onProgress);
