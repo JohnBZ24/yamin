@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { AskResponse } from '../lib/api';
+import { bubbleWidth } from '../theme/bubble-width';
 import { radius, space, type } from '../theme/tokens';
 import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
@@ -42,7 +43,15 @@ export function AnswerCard({ entry }: { entry: AnswerEntry }) {
       {/* What you asked */}
       <View style={styles.right}>
         <View
-          style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
+          style={[
+            styles.mine,
+            {
+              // Definite width — see theme/bubble-width.ts. The floor clears the
+              // search icon, the gap and the timestamp beneath it.
+              width: bubbleWidth(entry.question, mineMax, { min: 150 }),
+              backgroundColor: colors.brand,
+            },
+          ]}
         >
           <View style={styles.askRow}>
             <Feather name="search" size={13} color={colors.onBrandMuted} />
@@ -65,7 +74,8 @@ export function AnswerCard({ entry }: { entry: AnswerEntry }) {
           style={[
             styles.theirs,
             {
-              maxWidth: theirsMax,
+              // Definite: Markdown plus a sources list, nothing to estimate.
+              width: theirsMax,
               backgroundColor: colors.brandSurface,
               borderColor: colors.brandBorder,
             },
@@ -140,12 +150,9 @@ const styles = StyleSheet.create({
   group: { gap: space.sm, marginBottom: space.xl },
   right: { flexDirection: 'row', justifyContent: 'flex-end' },
   left: { flexDirection: 'row', justifyContent: 'flex-start' },
-  // maxWidth is supplied per-render from useLayout(), in pixels — see note-card.
-  //
-  // No `flexShrink: 1` + `minWidth: 0` on these: inside the row wrappers above,
-  // that pair let Yoga shrink the bubble to min-content on Android, which
-  // rendered the text one character per line. Content-sized up to maxWidth is
-  // what a chat bubble actually wants.
+  // Width is a definite pixel value from bubble-width.ts, supplied per-render.
+  // An auto-width (`maxWidth`-only) bubble reproduces whatever width its parent
+  // reports, which is what rendered text one character per line — see note-card.
   mine: {
     padding: space.lg,
     borderRadius: radius.lg,

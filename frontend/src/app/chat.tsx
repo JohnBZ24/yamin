@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from '../lib/keyboard-controller';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import Animated from 'react-native-reanimated';
 
 import { api, AskSource, ConverseResponse } from '../lib/api';
 import { MarkdownText } from '../components/markdown-text';
@@ -22,6 +22,7 @@ import { useSession } from '../hooks/use-session';
 import { useVoiceDictation } from '../hooks/use-voice-dictation';
 import { queryKeys, useChatHistory } from '../lib/queries';
 import { randomUuid } from '../lib/uuid';
+import { bubbleWidth } from '../theme/bubble-width';
 import { radius, space, type } from '../theme/tokens';
 import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
@@ -444,24 +445,47 @@ function ChatTurn({ turn }: { turn: Turn }) {
   return (
     <View style={styles.turn}>
       <View style={styles.rowRight}>
-        <Animated.View
-          entering={FadeInUp.duration(180)}
+        {/*
+          A plain View, and no `entering` animation — that is the fix, not a
+          simplification.
+
+          These two bubbles used to be Animated.Views with FadeInUp/FadeInDown.
+          A Reanimated entering animation drives the view's own layout on the UI
+          thread, and on Android's Fabric renderer it does that from a frame
+          snapshot taken before the parent has settled. An auto-width box (which
+          is what `maxWidth` alone gives you) then inherits that unsettled width
+          — and a bubble asked to fit a 2-line message into ~40px renders it one
+          character per line, stacked downwards. That is the "chat renders
+          vertically" bug.
+
+          The home feed never showed it because note-card/answer-card have no
+          entry animation (they are under a virtualised list, where a staggered
+          fade replays on every scroll pass). This screen kept it, which is why
+          only the chat screen stayed broken.
+        */}
+        <View
           style={[
             styles.question,
-            { maxWidth: mineMax, backgroundColor: colors.brand },
+            {
+              width: bubbleWidth(turn.question, mineMax),
+              backgroundColor: colors.brand,
+            },
           ]}
         >
           <Text style={[type.body, { color: colors.onBrand }]}>{turn.question}</Text>
-        </Animated.View>
+        </View>
       </View>
 
       <View style={styles.rowLeft}>
-        <Animated.View
-          entering={FadeInDown.duration(180)}
+        <View
           style={[
             styles.answer,
             {
-              maxWidth: theirsMax,
+              // Definite, not `maxWidth`. Yamin's answers carry Markdown, a
+              // sources list and a badge row, so there is nothing meaningful to
+              // estimate from — and full column width is what a long answer
+              // wants anyway.
+              width: theirsMax,
               backgroundColor: colors.surface,
               borderColor: colors.borderSubtle,
             },
@@ -510,7 +534,7 @@ function ChatTurn({ turn }: { turn: Turn }) {
               ))}
             </>
           )}
-        </Animated.View>
+        </View>
       </View>
     </View>
   );
@@ -567,19 +591,12 @@ const styles = StyleSheet.create({
     paddingVertical: space.md,
   },
   turn: { gap: space.sm },
-  // maxWidth comes from useLayout() in pixels, not '%'.
-  //
-  // No `flexShrink`/`minWidth: 0` here, deliberately. Those govern the MAIN
-  // axis, which in this column is vertical, so they bought nothing — but they
-  // also told Yoga the box may shrink to zero width, and on Android that is
-  // taken literally: the bubble collapses to min-content and the text renders
-  // one character per line, stacked downwards. alignSelf plus a pixel maxWidth
-  // is the whole job.
-  // Rows decide the side; the bubbles are content-sized up to maxWidth. Same
-  // pattern as answer-card.tsx and note-card.tsx — see the note there. An
-  // `alignSelf` bubble is an auto-width box, and on Android that collapses to
-  // min-content, rendering one word per line. No flexShrink/minWidth here
-  // either: that pair collapses it to one character per line instead.
+  // The rows pick the side; the bubbles carry a definite pixel `width` from
+  // bubble-width.ts. Two things were wrong on this screen and only one of them
+  // was shared with the home feed: the bubbles were auto-width (so they
+  // inherited any bad parent width verbatim), AND they were Animated.Views with
+  // entering animations, which is what produced the bad parent width in the
+  // first place. Both are gone — see the comment in ChatTurn.
   rowRight: { flexDirection: 'row', justifyContent: 'flex-end' },
   rowLeft: { flexDirection: 'row', justifyContent: 'flex-start' },
   question: {

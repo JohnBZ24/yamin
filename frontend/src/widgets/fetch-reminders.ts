@@ -44,18 +44,38 @@ export async function fetchRemindersForWidget(
 }
 
 /**
+ * How far past its time a `scheduled` reminder is still treated as imminent.
+ *
+ * A little slack is right: the worker fires within a minute, and a reminder due
+ * thirty seconds ago is genuinely the next thing coming. Beyond this it is
+ * stuck, not imminent — the job was lost, or the worker was down when it came
+ * due — and it must not be allowed to sit at the front of the queue forever.
+ */
+const STALE_AFTER_MS = 60 * 60 * 1000;
+
+/**
  * The next reminder the user actually cares about.
  *
  * Filters on `status` rather than trusting position — the endpoint orders
  * upcoming-first, but relying on that silently breaks if the ordering ever
- * changes. Past-due `scheduled` reminders are deliberately kept: one the worker
- * has not fired yet is still the next thing coming, and hiding it would make the
- * widget look empty exactly when the backend is lagging.
+ * changes.
+ *
+ * Reminders can now be scheduled months out (a birthday, say), which makes the
+ * stale case matter in a way it did not when everything was minutes away: a
+ * single `scheduled` row that never fired sorts ahead of every real reminder and
+ * would show "now" on the home screen indefinitely, hiding the one the user is
+ * actually waiting for. Recently-due reminders are still kept — that is the
+ * backend-lagging case, where showing it is correct.
  */
-export function pickNext(reminders: Reminder[]): Reminder | null {
+export function pickNext(reminders: Reminder[], now: Date = new Date()): Reminder | null {
+  const cutoff = now.getTime() - STALE_AFTER_MS;
   return (
     [...reminders]
-      .filter((r) => r.status === 'scheduled')
+      .filter(
+        (r) =>
+          r.status === 'scheduled' &&
+          new Date(r.scheduledFor).getTime() >= cutoff,
+      )
       .sort(
         (a, b) =>
           new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime(),

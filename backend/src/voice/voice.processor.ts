@@ -29,6 +29,7 @@ import { safeTransaction } from '../utils/queryRunner/querry-runner-release-mech
 import {
   describeNow,
   nextOccurrenceUtc,
+  occurrenceOnDateUtc,
   resolveTimezone,
 } from '../utils/time/timezone';
 
@@ -118,6 +119,13 @@ type ExtractedGraph = z.infer<typeof EXTRACTION_SCHEMA>;
  * report of work the user can tell is real.
  */
 export type VoiceStage = 'understanding' | 'extracting' | 'remembering';
+
+/**
+ * Local hour a dated reminder lands on when the user named a day but no clock
+ * time ("remind me on the 10th of August"). Morning, because the point of a
+ * day-scoped reminder is to have it before the day gets away from you.
+ */
+const DEFAULT_REMINDER_HOUR = 9;
 
 @Processor('voice-processing')
 @Injectable()
@@ -491,13 +499,19 @@ export class VoiceProcessor extends WorkerHost {
         '',
         'If the user wants to be reminded of something and you can tell WHEN, call scheduleReminder.',
         '',
-        'If they clearly want a reminder but the time is missing, ambiguous, or already',
-        'past for today, call askAboutTime instead of guessing. Guessing a time is worse',
-        'than asking: a reminder that fires at the wrong moment is the same as no reminder.',
+        'A reminder can be days or months away, not just today. If the user names a DAY or',
+        'a DATE — "on the 10th of August", "next Tuesday", "my birthday is 10 August, remind',
+        'me" — put it in onDate as YYYY-MM-DD, worked out from the current date above. A date',
+        'with no clock time is COMPLETE: schedule it, do not ask what time. Only ask when you',
+        'cannot tell WHICH DAY.',
+        '',
+        'If they clearly want a reminder but you cannot tell which day at all, call',
+        'askAboutTime instead of guessing. Guessing a day is worse than asking: a reminder',
+        'that fires at the wrong moment is the same as no reminder.',
         'Ask a short, specific question naming what you did understand. But do NOT ask',
         'about things the recent notes already answer — if the user already said the',
         'operation is Tuesday and now says "remind me about the operation", that IS',
-        'enough to ask only for the missing piece (the time), nothing else.',
+        'enough to schedule it, not to ask again.',
         '',
         'If it is not a scheduling request at all, call nothing — most notes are just',
         'something to remember. A statement of fact ("he has an operation Tuesday") is',
@@ -529,12 +543,44 @@ export class VoiceProcessor extends WorkerHost {
                 "24-hour HH:mm. Use for a spoken CLOCK TIME. Convert e.g. '2:43pm' to '14:43' yourself " +
                   '— do NOT compute a delay for this case, the server resolves it against the real clock.',
               ),
+            onDate: z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/)
+              .optional()
+              .describe(
+                'YYYY-MM-DD in the user\'s own timezone. Use for a spoken CALENDAR DATE — "on the 10th of ' +
+                  'August", "next Tuesday", "my birthday on 10 August". Resolve it against the current date ' +
+                  'given above, and pick the NEXT time that date occurs (if it has already passed this year, ' +
+                  'use next year). Combine with atTime when a clock time was also given; on its own it ' +
+                  `defaults to ${String(DEFAULT_REMINDER_HOUR).padStart(2, '0')}:00 local.`,
+              ),
           }),
-          execute: async ({ title, delayMinutes, atTime }) => {
+          execute: async ({ title, delayMinutes, atTime, onDate }) => {
             let target: Date;
             let describe: string;
 
-            if (atTime) {
+            if (onDate) {
+              // A named date is the most specific thing the user can give, so it
+              // wins over a bare clock time (which can only reach tomorrow).
+              // Without a clock time it lands at a conventional morning hour
+              // rather than bouncing back to ask: for "10 August is my
+              // birthday", the date IS the request, and the confirmation below
+              // always states the resolved time so the default is visible and
+              // correctable rather than silent.
+              const [h, m] = atTime
+                ? (atTime.split(':').map(Number) as [number, number])
+                : [DEFAULT_REMINDER_HOUR, 0];
+              target = occurrenceOnDateUtc(onDate, h, m, timezone);
+              describe = `on ${onDate} at ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} (${timezone})`;
+
+              // The model is told today's date, so a past target means it got
+              // the year wrong — loud, for the same reason as the else branch.
+              if (target.getTime() <= now.getTime()) {
+                throw new Error(
+                  `scheduleReminder resolved to a past instant (onDate=${onDate}, atTime=${atTime ?? 'default'}, tz=${timezone})`,
+                );
+              }
+            } else if (atTime) {
               const [h, m] = atTime.split(':').map(Number);
               target = nextOccurrenceUtc(h, m, timezone, now);
               describe = `at ${atTime} (${timezone})`;
@@ -546,7 +592,7 @@ export class VoiceProcessor extends WorkerHost {
               // is what surfaces this as a bug instead of a silently-missed
               // reminder — the old code had no such guard.
               throw new Error(
-                `scheduleReminder called with neither a valid atTime nor delayMinutes (got atTime=${atTime}, delayMinutes=${delayMinutes})`,
+                `scheduleReminder called with no usable time (got onDate=${onDate}, atTime=${atTime}, delayMinutes=${delayMinutes})`,
               );
             }
 
@@ -597,13 +643,31 @@ export class VoiceProcessor extends WorkerHost {
                 now,
               );
 
+            // A reminder can now be months out, so the year matters too: "Mon,
+            // Aug 10, 9:00 AM" is ambiguous when the date has already gone by
+            // this year and the model correctly picked next year's.
+            const sameYear =
+              new Intl.DateTimeFormat('en-CA', {
+                timeZone: timezone,
+                year: 'numeric',
+              }).format(target) ===
+              new Intl.DateTimeFormat('en-CA', {
+                timeZone: timezone,
+                year: 'numeric',
+              }).format(now);
+
             const clockLabel = new Intl.DateTimeFormat('en-US', {
               timeZone: timezone,
               hour: 'numeric',
               minute: '2-digit',
               ...(sameDay
                 ? {}
-                : { weekday: 'short', month: 'short', day: 'numeric' }),
+                : {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    ...(sameYear ? {} : { year: 'numeric' }),
+                  }),
             }).format(target);
 
             // Structured, not a bare string assigned to an outer closure

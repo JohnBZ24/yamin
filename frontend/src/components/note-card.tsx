@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import { VoiceNote } from '../lib/api';
+import { bubbleWidth } from '../theme/bubble-width';
 import { radius, space, type } from '../theme/tokens';
 import { useLayout } from '../theme/use-layout';
 import { useTokens } from '../theme/use-tokens';
@@ -202,7 +203,26 @@ export function NoteCard({
       {/* What you said */}
       <View style={styles.rowRight}>
         <View
-          style={[styles.mine, { maxWidth: mineMax, backgroundColor: colors.brand }]}
+          style={[
+            styles.mine,
+            {
+              /**
+               * A definite width, not `maxWidth`. An auto-width bubble is only
+               * ever as wide as its parent claims to be, so a parent reporting a
+               * bad width renders the transcript one character per line — see
+               * theme/bubble-width.ts for the Yoga numbers.
+               *
+               * The floor is higher for a voice note because the audio player
+               * has fixed-width waveform bars (24 bars plus gaps plus the play
+               * icon is ~190px with padding) and those overflow rather than
+               * wrap. A typed note only has to clear its footer row.
+               */
+              width: bubbleWidth(note.rawText ?? '', mineMax, {
+                min: note.audioUrl ? 240 : 150,
+              }),
+              backgroundColor: colors.brand,
+            },
+          ]}
         >
           {note.audioUrl ? (
             <AudioBubble url={note.audioUrl} peaks={note.peaks} />
@@ -228,7 +248,9 @@ export function NoteCard({
           style={[
             styles.theirs,
             {
-              maxWidth: theirsMax,
+              // Definite. Yamin's side carries a summary, a status badge and a
+              // wrapping tag list, so there is nothing to estimate from.
+              width: theirsMax,
               backgroundColor: colors.surface,
               borderColor: colors.borderSubtle,
             },
@@ -284,40 +306,20 @@ const styles = StyleSheet.create({
   // width by default, which is what gives the bubbles a definite width to size
   // against.
   group: { gap: space.sm, marginBottom: space.xl },
-  // maxWidth is supplied per-render from useLayout(), in pixels — never '%',
-  // which Yoga resolves against an indefinite parent and collapses to
-  // min-content.
-  //
-  // The bubbles used to sit inside `flexDirection: 'row'` wrappers and carry
-  // `flexShrink: 1` + `minWidth: 0`. Together those told Yoga the box was free
-  // to shrink to zero width, and on Android it did exactly that — the text came
-  // out one character per line, stacked downwards. There is no row now and no
-  // shrink: alignSelf picks the side, maxWidth caps the measure, and the bubble
-  // hugs its content in between.
   /**
-   * Each bubble sits in its own row, and the row decides which side it hugs.
-   * Identical to `right`/`left` in answer-card.tsx — deliberately the same
-   * pattern, because that one was arrived at on a device.
+   * The row decides which side the bubble hugs; the bubble carries a definite
+   * pixel `width` from bubble-width.ts, supplied per-render.
    *
-   * This replaces `alignSelf: 'flex-end'` on the bubble itself, which is what
-   * rendered notes one word per line on Android. `alignSelf` sets a child's
-   * CROSS-axis size in a column, making the bubble's width `auto` — resolved by
-   * a shrink-to-fit measure. Inside a virtualised FlatList that measure can run
-   * before the parent's width is definite, and an auto width with nothing to
-   * measure against falls back to min-content: the longest single word.
-   *
-   * In a row the width is a MAIN-axis size instead, resolved against the row's
-   * definite width, and the bubble is simply content-sized up to `maxWidth`.
+   * Earlier revisions of this file blamed the one-character-per-line bug on
+   * `alignSelf`, then on `flexShrink: 1` + `minWidth: 0`, and removed each in
+   * turn. Checked since against the real Yoga engine, none of those collapse the
+   * bubble: with a healthy parent width all of them lay out identically and
+   * correctly. The actual cause is upstream — a parent reporting a width of
+   * ~40px, which an auto-width bubble then honours exactly. So the width here is
+   * definite and no longer asks the parent anything.
    */
   rowRight: { flexDirection: 'row', justifyContent: 'flex-end' },
   rowLeft: { flexDirection: 'row', justifyContent: 'flex-start' },
-  /**
-   * No `flexShrink: 1` and no `minWidth: 0` on these two. answer-card.tsx
-   * records why: inside these row wrappers that pair lets Yoga shrink the bubble
-   * to min-content on Android, which renders one CHARACTER per line — a worse
-   * version of the bug being fixed here. Content-sized up to maxWidth is what a
-   * chat bubble actually wants.
-   */
   mine: {
     padding: space.lg,
     borderRadius: radius.lg,

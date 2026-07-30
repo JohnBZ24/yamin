@@ -101,6 +101,37 @@ export function nextOccurrenceUtc(
   return new Date(targetUtc);
 }
 
+/**
+ * The UTC instant at which the wall clock in `timeZone` reads `hour:minute` on
+ * a specific calendar date.
+ *
+ * Needed because `nextOccurrenceUtc` can only ever reach today or tomorrow: it
+ * takes a clock time and nothing else, so a reminder further out than 24 hours
+ * was not expressible. "10 August is my birthday, remind me" therefore could not
+ * be scheduled at all — the model had no parameter to put the date in, and fell
+ * back to asking the user for a time it already had.
+ *
+ * @param date `YYYY-MM-DD`, read as a calendar date in `timeZone` (not UTC).
+ */
+export function occurrenceOnDateUtc(
+  date: string,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) {
+    throw new Error(`occurrenceOnDateUtc: expected YYYY-MM-DD, got "${date}"`);
+  }
+  const [, y, mo, d] = match.map(Number) as [unknown, number, number, number];
+
+  // Same one-pass offset correction as nextOccurrenceUtc: treat the target wall
+  // clock as UTC, then subtract the zone's offset at approximately that instant.
+  const guessUtc = Date.UTC(y, mo - 1, d, hour, minute, 0);
+  const offset = offsetMinutesAt(new Date(guessUtc), timeZone);
+  return new Date(guessUtc - offset * 60_000);
+}
+
 /** Human-readable anchor for a prompt: "Tuesday 2026-07-21, 14:47 (Asia/Beirut)". */
 export function describeNow(timeZone: string, now: Date = new Date()): string {
   const formatted = new Intl.DateTimeFormat('en-US', {
