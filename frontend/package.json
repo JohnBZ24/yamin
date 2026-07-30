@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "main": "expo-router/entry",
+  "main": "./index.js",
   "version": "1.0.0",
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
@@ -12,6 +12,7 @@
     "expo": "~57.0.4",
     "expo-asset": "~57.0.7",
     "expo-audio": "~57.0.2",
+    "expo-calendar": "~57.0.1",
     "expo-constants": "~57.0.3",
     "expo-dev-client": "~57.0.9",
     "expo-device": "~57.0.1",
@@ -29,6 +30,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
+    "react-native-android-widget": "^0.21.0",
     "react-native-gesture-handler": "~2.32.0",
     "react-native-keyboard-controller": "1.21.9",
     "react-native-markdown-display": "^7.0.2",

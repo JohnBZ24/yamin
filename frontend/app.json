@@ -57,7 +57,38 @@
         }
       ],
       "expo-secure-store",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Yamin adds the reminders you ask for to your calendar, so they show up alongside everything else you have on."
+        }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "fonts": [
+            "./assets/fonts/Inter_500Medium.ttf",
+            "./assets/fonts/Sora_600SemiBold.ttf"
+          ],
+          "widgets": [
+            {
+              "name": "NextReminder",
+              "label": "Yamin — Next reminder",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 2,
+              "maxResizeWidth": "400dp",
+              "maxResizeHeight": "200dp",
+              "resizeMode": "horizontal|vertical",
+              "description": "What Yamin is about to remind you about",
+              "previewImage": "./assets/images/icon.png",
+              "updatePeriodMillis": 1800000
+            }
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

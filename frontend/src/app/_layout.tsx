@@ -14,6 +14,7 @@ import { Sora_600SemiBold, Sora_700Bold } from '@expo-google-fonts/sora';
 import { KeyboardProvider } from '../lib/keyboard-controller';
 
 import { ToastProvider } from '../components/toast';
+import { ReminderSync } from '../components/reminder-sync';
 import { QueryProvider } from '../lib/query-provider';
 import { RealtimeProvider } from '../lib/realtime';
 import { useTokens } from '../theme/use-tokens';
@@ -79,6 +80,10 @@ export default function RootLayout() {
               reminder socket must survive navigation between screens. */}
           <RealtimeProvider>
             <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+            {/* Renders nothing; mirrors reminders out to the Android home-screen
+                widget and the device calendar. Inside QueryProvider because it
+                reads the query cache. */}
+            <ReminderSync />
             <View style={{ flex: 1, backgroundColor: colors.canvas }}>
               <Slot />
             </View>

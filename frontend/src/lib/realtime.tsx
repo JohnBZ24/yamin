@@ -6,8 +6,11 @@ import React, {
 } from 'react';
 import io, { Socket } from 'socket.io-client';
 
+import { useQueryClient } from '@tanstack/react-query';
+
 import { API_URL } from './api';
 import { presentReminder } from './local-notify';
+import { queryKeys } from './queries';
 import { useToast } from '../components/toast';
 import { useSession } from '../hooks/use-session';
 
@@ -34,6 +37,7 @@ export function useRealtime(): Realtime {
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const { token } = useSession();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [online, setOnline] = useState(false);
 
@@ -69,6 +73,14 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     });
 
     s.on('reminder-alert', (data: any) => {
+      /**
+       * This reminder has just fired, so it is history now and the "next" one has
+       * changed. Without this the sidebar — and the home-screen widget, which
+       * reads the same cache through WidgetSync — would keep showing a reminder
+       * that already went off, for up to 30 minutes.
+       */
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reminders });
+
       // OS notification first (browser Notification on web, a real local
       // notification on native); the sticky toast is the in-app fallback for
       // when permission was refused — sticky, because a reminder that fades
@@ -84,7 +96,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     return () => {
       s.disconnect();
     };
-  }, [token, toast]);
+  }, [token, toast, queryClient]);
 
   return (
     <RealtimeContext.Provider value={{ socket, online }}>
